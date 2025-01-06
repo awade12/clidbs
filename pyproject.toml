@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clidbs"
+dynamic = ["version"]
+description = "A modern CLI tool for managing databases on VPS systems with SSL support"
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0.0",
+    "docker>=6.1.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0"
+]
+readme = "README.md"
+authors = [
+    { name = "Andrew Wade" }
+]
+
+[project.scripts]
+clidb = "clidbs.cli:main"
+
+[tool.hatch.version]
+path = "src/clidbs/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clidbs"] 
