@@ -15,6 +15,7 @@ class DatabaseCredentials:
     host: str
     access: str
     name: str
+    webhook_url: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -25,7 +26,8 @@ class DatabaseCredentials:
             "port": self.port,
             "host": self.host,
             "access": self.access,
-            "name": self.name
+            "name": self.name,
+            "webhook_url": self.webhook_url
         }
 
     @classmethod

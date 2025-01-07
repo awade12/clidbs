@@ -8,7 +8,7 @@ import requests
 from packaging import version
 import time
 
-from .notifications import send_discord_notification
+from .notifications import notification_manager, EventType
 from .config import Config
 from .databases import (
     get_database_config, 
@@ -25,7 +25,8 @@ from .style import (
     print_db_list,
     print_supported_dbs,
     print_action,
-    print_help_menu
+    print_help_menu,
+    print_db_metrics
 )
 from .functions import (
     check_docker_available,
@@ -38,6 +39,12 @@ from .functions import (
     get_cli_command,
     generate_password,
     run_command
+)
+from .functions.docker_utils import (
+    find_next_available_port,
+    check_container_exists,
+    remove_container_if_exists,
+    get_container_metrics
 )
 
 from . import __version__
@@ -104,25 +111,43 @@ def main():
 @click.option('--user', help='Database user to create')
 @click.option('--port', type=int, help='Port to expose the database on')
 @click.option('--discord-webhook', help='Discord webhook URL for notifications')
+@click.option('--force', is_flag=True, help='Force creation by removing existing container if it exists')
 def create(db_name: str, db_type: str, version: Optional[str], access: str, user: str, 
-          port: Optional[int], discord_webhook: Optional[str]):
-    """Create a new database.
-    
-    Example: clidb create mydb --type postgres --version 16
-    """
+          port: Optional[int], discord_webhook: Optional[str], force: bool = False):
+    """Create a new database."""
     try:
         client: DockerClient = docker.from_env()
         
         # Get database configuration
         db_config = get_database_config(db_type, version)
         
+        # Check if container already exists
+        container_name = get_container_name(db_type, db_name)
+        if check_container_exists(client, container_name):
+            if not force:
+                raise Exception(
+                    f"A database named '{db_name}' already exists. Use --force to remove it and create a new one, "
+                    f"or use a different name."
+                )
+            print_warning(f"Removing existing database '{db_name}' (--force flag used)")
+            remove_container_if_exists(client, container_name)
+        
         # Use db_name as user if not specified
         if not user:
             user = db_name
             
-        # Use default port if not specified
+        # Handle port allocation
         if not port:
             port = db_config.default_port
+        
+        # If port is taken, find next available port
+        if not find_next_available_port(port, max_attempts=1):  # Check if specified port is available
+            next_port = find_next_available_port(port + 1, max_attempts=100)
+            if next_port:
+                print_warning(f"Port {port} is already in use. Using port {next_port} instead.")
+                port = next_port
+            else:
+                raise Exception(f"Could not find an available port starting from {port}")
         
         # Generate secure password
         password = generate_password()
@@ -139,7 +164,7 @@ def create(db_name: str, db_type: str, version: Optional[str], access: str, user
         # Prepare container configuration
         container_config = {
             'image': db_config.image,
-            'name': get_container_name(db_type, db_name),
+            'name': container_name,
             'environment': environment,
             'ports': ports,
             'network_mode': network_mode,
@@ -158,7 +183,7 @@ def create(db_name: str, db_type: str, version: Optional[str], access: str, user
         # Get the appropriate host
         host = get_host_ip() if access == 'public' else 'localhost'
         
-        # Store credentials
+        # Store credentials with webhook URL
         creds = DatabaseCredentials(
             db_type=db_type,
             version=version,
@@ -167,7 +192,8 @@ def create(db_name: str, db_type: str, version: Optional[str], access: str, user
             port=port,
             host=host,
             access=access,
-            name=db_name
+            name=db_name,
+            webhook_url=discord_webhook
         )
         credentials_manager.store_credentials(creds)
         
@@ -194,24 +220,28 @@ CLI Command:
 Tip: Use 'clidb info {db_name}' to see these details again.
 """)
         
-        if discord_webhook:
-            # Don't send sensitive info to Discord
-            safe_message = f"""Database '{db_name}' ({db_config.name} {version or 'latest'}) created successfully!
-Type: {db_config.name}
-Host: {host}
-Port: {port}"""
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=safe_message
-            )
+        # Send notification
+        notification_manager.send_notification(
+            event_type=EventType.DB_CREATED,
+            db_info={
+                "name": db_name,
+                "type": db_config.name,
+                "version": version,
+                "host": host,
+                "port": port,
+                "access": access
+            },
+            webhook_url=discord_webhook
+        )
             
     except Exception as e:
         print_error(f"Failed to create database: {str(e)}")
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Error creating database '{db_name}': {str(e)}"
-            )
+        notification_manager.send_notification(
+            event_type=EventType.DB_CREATION_FAILED,
+            db_info={"name": db_name, "type": db_type},
+            webhook_url=discord_webhook,
+            error_message=str(e)
+        )
 
 @main.command()
 @click.argument('db_name')
@@ -333,8 +363,7 @@ def info(db_name: str, reset_password: bool):
 
 @main.command()
 @click.argument('db_name')
-@click.option('--discord-webhook', help='Discord webhook URL for notifications')
-def stop(db_name: str, discord_webhook: Optional[str]):
+def stop(db_name: str):
     """Stop a database."""
     try:
         client = docker.from_env()
@@ -343,21 +372,29 @@ def stop(db_name: str, discord_webhook: Optional[str]):
         if not container:
             raise Exception(f"Database '{db_name}' not found")
         
+        # Get credentials for webhook URL
+        creds = credentials_manager.get_credentials(db_name)
+        
         container.stop()
         print_action("Stop", db_name)
         
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Database '{db_name}' stopped successfully"
+        if creds:
+            # Get database info for notification
+            db_name, db_type = get_db_info(container.name)
+            notification_manager.send_notification(
+                event_type=EventType.DB_STOPPED,
+                db_info={"name": db_name, "type": db_type},
+                webhook_url=creds.webhook_url
             )
     except Exception as e:
         print_action("Stop", db_name, success=False)
         print_error(str(e))
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Failed to stop database '{db_name}': {str(e)}"
+        if creds:
+            notification_manager.send_notification(
+                event_type=EventType.DB_STOP_FAILED,
+                db_info={"name": db_name},
+                webhook_url=creds.webhook_url,
+                error_message=str(e)
             )
 
 @main.command()
@@ -374,6 +411,9 @@ def start(db_name: str):
         if not container:
             raise Exception(f"Database '{db_name}' not found")
         
+        # Get credentials for webhook URL
+        creds = credentials_manager.get_credentials(db_name)
+        
         # Try to start the container
         container.start()
         
@@ -388,14 +428,28 @@ def start(db_name: str):
         
         print_action("Start", db_name)
         
+        if creds:
+            # Get database info for notification
+            db_name, db_type = get_db_info(container.name)
+            notification_manager.send_notification(
+                event_type=EventType.DB_STARTED,
+                db_info={"name": db_name, "type": db_type},
+                webhook_url=creds.webhook_url
+            )
+        
     except Exception as e:
         print_error(f"Failed to start database: {str(e)}")
-        return
+        if creds:
+            notification_manager.send_notification(
+                event_type=EventType.DB_START_FAILED,
+                db_info={"name": db_name},
+                webhook_url=creds.webhook_url,
+                error_message=str(e)
+            )
 
 @main.command()
 @click.argument('db_name')
-@click.option('--discord-webhook', help='Discord webhook URL for notifications')
-def remove(db_name: str, discord_webhook: Optional[str]):
+def remove(db_name: str):
     """Remove a database completely."""
     try:
         client = docker.from_env()
@@ -404,22 +458,32 @@ def remove(db_name: str, discord_webhook: Optional[str]):
         if not container:
             raise Exception(f"Database '{db_name}' not found")
         
+        # Get credentials for webhook URL before removal
+        creds = credentials_manager.get_credentials(db_name)
+        webhook_url = creds.webhook_url if creds else None
+        
+        # Get database info before removal for notification
+        db_name, db_type = get_db_info(container.name)
+        
         container.remove(force=True)
         credentials_manager.remove_credentials(db_name)
         print_action("Remove", db_name)
         
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Database '{db_name}' removed successfully"
+        if webhook_url:
+            notification_manager.send_notification(
+                event_type=EventType.DB_REMOVED,
+                db_info={"name": db_name, "type": db_type},
+                webhook_url=webhook_url
             )
     except Exception as e:
         print_action("Remove", db_name, success=False)
         print_error(str(e))
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Failed to remove database '{db_name}': {str(e)}"
+        if webhook_url:
+            notification_manager.send_notification(
+                event_type=EventType.DB_REMOVE_FAILED,
+                db_info={"name": db_name},
+                webhook_url=webhook_url,
+                error_message=str(e)
             )
 
 @main.command()
@@ -695,6 +759,43 @@ def recreate(db_name: str):
             
     except Exception as e:
         print_error(f"Failed to recreate database: {str(e)}")
+
+@main.command()
+@click.argument('db_name')
+@click.option('--watch', is_flag=True, help='Watch metrics in real-time (updates every 2 seconds)')
+def metrics(db_name: str, watch: bool):
+    """Show detailed metrics for a database.
+    
+    Example: clidb metrics mydb
+    """
+    try:
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+        
+        if watch:
+            try:
+                while True:
+                    # Clear screen
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    
+                    # Get and display metrics
+                    metrics = get_container_metrics(container)
+                    print_db_metrics(db_name, metrics)
+                    
+                    # Wait before next update
+                    time.sleep(2)
+            except KeyboardInterrupt:
+                print("\nStopped watching metrics")
+                return
+        else:
+            metrics = get_container_metrics(container)
+            print_db_metrics(db_name, metrics)
+            
+    except Exception as e:
+        print_error(f"Failed to get metrics: {str(e)}")
 
 if __name__ == '__main__':
     main() 

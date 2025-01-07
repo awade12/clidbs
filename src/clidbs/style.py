@@ -6,6 +6,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich.box import ROUNDED
 from rich.console import Group
+from .functions.docker_utils import format_bytes
 
 console = Console()
 
@@ -154,6 +155,11 @@ def print_help_menu():
         "clidb info mydb"
     )
     table.add_row(
+        "metrics",
+        "Show database performance metrics",
+        "clidb metrics mydb --watch"
+    )
+    table.add_row(
         "start",
         "Start a stopped database",
         "clidb start mydb"
@@ -216,6 +222,11 @@ def print_help_menu():
         "auto"
     )
     options_table.add_row(
+        "--force",
+        "Overwrite existing database",
+        "none"
+    )
+    options_table.add_row(
         "--discord-webhook",
         "Discord webhook URL for notifications",
         "none"
@@ -227,3 +238,99 @@ def print_help_menu():
     console.print("\n")
     console.print(options_table)
     console.print("\n[bold]For more information, visit: [link=https://github.com/awade12/clidbs]GitHub Repository[/link][/bold]") 
+
+def print_db_metrics(db_name: str, metrics: dict):
+    """Display database metrics in a styled format."""
+    if "error" in metrics:
+        print_error(f"Failed to get metrics for '{db_name}': {metrics['error']}")
+        return
+        
+    # Create main metrics panel
+    main_metrics = Table(show_header=False, box=ROUNDED, expand=True)
+    main_metrics.add_column("Key", style="cyan bold")
+    main_metrics.add_column("Value", style="white")
+    
+    # Status with color
+    status_color = {
+        "running": "green",
+        "exited": "red",
+        "paused": "yellow"
+    }.get(metrics["status"], "white")
+    
+    main_metrics.add_row("Status:", f"[{status_color}]{metrics['status'].upper()}[/{status_color}]")
+    main_metrics.add_row("Uptime:", metrics["uptime"])
+    main_metrics.add_row("Restarts:", str(metrics["restarts"]))
+    main_metrics.add_row("Processes:", str(metrics["pids"]))
+    
+    # Create resource usage panel
+    resource_metrics = Table(
+        title="[bold blue]Resource Usage[/bold blue]",
+        box=ROUNDED,
+        show_header=False,
+        title_justify="left"
+    )
+    resource_metrics.add_column("Type", style="cyan bold")
+    resource_metrics.add_column("Usage", style="white")
+    
+    # CPU usage with color
+    cpu_color = "green"
+    if metrics["cpu_percent"] > 80:
+        cpu_color = "red"
+    elif metrics["cpu_percent"] > 60:
+        cpu_color = "yellow"
+    
+    resource_metrics.add_row(
+        "CPU:",
+        f"[{cpu_color}]{metrics['cpu_percent']}%[/{cpu_color}]"
+    )
+    
+    # Memory usage with color
+    mem_color = "green"
+    if metrics["mem_percent"] > 80:
+        mem_color = "red"
+    elif metrics["mem_percent"] > 60:
+        mem_color = "yellow"
+    
+    resource_metrics.add_row(
+        "Memory:",
+        f"[{mem_color}]{metrics['mem_percent']}% ({format_bytes(metrics['mem_usage'])} / {format_bytes(metrics['mem_limit'])})[/{mem_color}]"
+    )
+    
+    # Create I/O metrics panel
+    io_metrics = Table(
+        title="[bold blue]I/O Statistics[/bold blue]",
+        box=ROUNDED,
+        show_header=False,
+        title_justify="left"
+    )
+    io_metrics.add_column("Type", style="cyan bold")
+    io_metrics.add_column("Read", style="green")
+    io_metrics.add_column("Write", style="yellow")
+    
+    # Network I/O
+    io_metrics.add_row(
+        "Network:",
+        f"↓ {format_bytes(metrics['net_rx'])}",
+        f"↑ {format_bytes(metrics['net_tx'])}"
+    )
+    
+    # Disk I/O
+    io_metrics.add_row(
+        "Disk:",
+        f"↓ {format_bytes(metrics['block_read'])}",
+        f"↑ {format_bytes(metrics['block_write'])}"
+    )
+    
+    # Combine all panels
+    console.print(Panel(
+        Group(
+            main_metrics,
+            "",  # Spacer
+            resource_metrics,
+            "",  # Spacer
+            io_metrics
+        ),
+        title=f"[bold blue]Metrics for '{db_name}'[/bold blue]",
+        box=ROUNDED,
+        padding=(1, 2)
+    )) 
