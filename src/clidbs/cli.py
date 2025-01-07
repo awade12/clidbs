@@ -7,10 +7,12 @@ import socket
 import shutil
 import platform
 import subprocess
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any
 import docker
 from docker.client import DockerClient
 from docker.models.containers import Container
+import requests
+from packaging import version
 
 from .notifications import send_discord_notification
 from .config import Config
@@ -31,6 +33,9 @@ from .style import (
     print_action,
     print_help_menu
 )
+
+# Import version
+from . import __version__
 
 # Global to store the SSL manager instance
 _ssl_manager = None
@@ -159,8 +164,35 @@ class CLIDBGroup(click.Group):
     
     def get_help(self, ctx: Context) -> str:
         """Override to show our styled help instead of Click's default."""
+        check_for_updates()  # Check for updates before showing help
         print_help_menu()
         return ""
+
+    def invoke(self, ctx: Context) -> Any:
+        """Override to check for updates before any command."""
+        check_for_updates()  # Check for updates before any command
+        return super().invoke(ctx)
+
+def check_for_updates():
+    """Check if there's a newer version available on PyPI."""
+    try:
+        response = requests.get("https://pypi.org/pypi/clidbs/json", timeout=1)
+        if response.status_code == 200:
+            latest_version = response.json()["info"]["version"]
+            current_version = __version__
+            
+            if version.parse(latest_version) > version.parse(current_version):
+                print_warning(f"""
+A new version of CLIDB is available!
+Current version: {current_version}
+Latest version:  {latest_version}
+
+To upgrade, run:
+    pipx upgrade clidbs
+""")
+    except Exception:
+        # Silently fail if we can't check for updates
+        pass
 
 @click.group(cls=CLIDBGroup)
 def main():

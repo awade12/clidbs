@@ -226,4 +226,4 @@ def print_help_menu():
     console.print(table)
     console.print("\n")
     console.print(options_table)
-    console.print("\n[bold]For more information, visit: [link=https://github.com/yourusername/clidb]GitHub Repository[/link][/bold]") 
+    console.print("\n[bold]For more information, visit: [link=https://github.com/awade12/clidbs]GitHub Repository[/link][/bold]") 
