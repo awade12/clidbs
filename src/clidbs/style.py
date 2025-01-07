@@ -6,21 +6,15 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich.box import ROUNDED
 from rich.console import Group
-from .functions.docker_utils import format_bytes
-
-console = Console()
-
-def print_success(message: str):
-    """green box for good news"""
-    console.print(Panel(message, style="green", box=ROUNDED))
-
-def print_error(message: str):
-    """red box for errors"""
-    console.print(Panel(f"[red bold]Error:[/red bold] {message}", style="red", box=ROUNDED))
-
-def print_warning(message: str):
-    """yellow box for warnings"""
-    console.print(Panel(f"[yellow bold]Warning:[/yellow bold] {message}", style="yellow", box=ROUNDED))
+from .functions.utils import format_bytes
+from .functions.print_utils import (
+    console,
+    print_success,
+    print_error,
+    print_warning,
+    print_action
+)
+from typing import Optional
 
 def print_db_info(title: str, info_dict: dict, connection_string: str = None, cli_command: str = None):
     """shows all db info in a nice panel"""
@@ -115,17 +109,6 @@ def print_supported_dbs(db_info: str):
         padding=(1, 2)
     ))
 
-def print_action(action: str, db_name: str, success: bool = True):
-    """quick status update with emoji"""
-    if success:
-        emoji = "✅"
-        color = "green"
-    else:
-        emoji = "❌"
-        color = "red"
-    
-    console.print(f"[{color}]{emoji} {action} '{db_name}' {success and 'successful' or 'failed'}[/{color}]") 
-
 def print_help_menu():
     """the help screen with all the commands"""
     table = Table(
@@ -173,6 +156,26 @@ def print_help_menu():
         "remove",
         "Remove a database completely",
         "clidb remove mydb"
+    )
+    table.add_row(
+        "backup",
+        "Create a database backup",
+        "clidb backup mydb --description 'My backup'"
+    )
+    table.add_row(
+        "restore",
+        "Restore from backup",
+        "clidb restore mydb 20240101_120000"
+    )
+    table.add_row(
+        "backups",
+        "List available backups",
+        "clidb backups --db mydb"
+    )
+    table.add_row(
+        "delete-backup",
+        "Delete a backup",
+        "clidb delete-backup mydb 20240101_120000"
     )
     table.add_row(
         "supported",
@@ -224,6 +227,11 @@ def print_help_menu():
     options_table.add_row(
         "--force",
         "Overwrite existing database",
+        "none"
+    )
+    options_table.add_row(
+        "--watch",
+        "Watch metrics in real-time",
         "none"
     )
     options_table.add_row(
@@ -334,3 +342,43 @@ def print_db_metrics(db_name: str, metrics: dict):
         box=ROUNDED,
         padding=(1, 2)
     )) 
+
+def print_backup_list(backups: list):
+    """Display list of backups in a table."""
+    if not backups:
+        print_warning("No backups found")
+        return
+    
+    table = Table(
+        title="[bold blue]Database Backups[/bold blue]",
+        box=ROUNDED,
+        show_lines=True,
+        padding=(0, 1)
+    )
+    
+    table.add_column("Database", style="cyan bold")
+    table.add_column("Timestamp", style="yellow")
+    table.add_column("Type", style="magenta")
+    table.add_column("Size", style="green")
+    table.add_column("Description", style="white")
+    
+    for backup in sorted(backups, key=lambda x: x["timestamp"], reverse=True):
+        table.add_row(
+            backup.get("database", ""),
+            backup["timestamp"],
+            backup["type"],
+            format_bytes(backup["size"]),
+            backup.get("description", "") or ""
+        )
+    
+    console.print(table)
+
+def print_backup_result(action: str, db_name: str, success: bool, timestamp: Optional[str] = None):
+    """Display backup action result."""
+    if success:
+        if timestamp:
+            print_success(f"{action} for database '{db_name}' completed successfully (timestamp: {timestamp})")
+        else:
+            print_success(f"{action} for database '{db_name}' completed successfully")
+    else:
+        print_error(f"{action} for database '{db_name}' failed") 

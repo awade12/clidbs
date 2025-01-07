@@ -4,11 +4,12 @@ import subprocess
 import os
 import platform
 from typing import Tuple, Optional
-from ..style import print_error, print_warning, print_success, print_action
 import docker
 import socket
 import psutil
 from datetime import datetime
+from .utils import format_bytes
+from .print_utils import print_error, print_warning, print_success, print_action
 
 def run_command(cmd: str) -> tuple[int, str, str]:
     """Run a shell command and return exit code, stdout, and stderr."""
@@ -203,29 +204,47 @@ def get_container_metrics(container) -> dict:
         # Get container stats
         stats = container.stats(stream=False)
         
-        # CPU Usage
-        cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
-        system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
+        # CPU Usage - handle different Docker versions and configurations
         cpu_percent = 0.0
-        if system_delta > 0:
-            cpu_percent = (cpu_delta / system_delta) * len(stats["cpu_stats"]["cpu_usage"]["percpu_usage"]) * 100.0
+        try:
+            cpu_stats = stats.get("cpu_stats", {})
+            precpu_stats = stats.get("precpu_stats", {})
+            
+            cpu_usage = cpu_stats.get("cpu_usage", {})
+            precpu_usage = precpu_stats.get("cpu_usage", {})
+            
+            cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
+            system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+            
+            if system_delta > 0:
+                num_cpus = len(cpu_usage.get("percpu_usage", [])) or os.cpu_count() or 1
+                cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+        except Exception:
+            # Fallback to psutil if Docker stats are not available
+            try:
+                process = psutil.Process(container.attrs['State']['Pid'])
+                cpu_percent = process.cpu_percent(interval=0.1)
+            except Exception:
+                cpu_percent = 0.0
         
         # Memory Usage
-        mem_usage = stats["memory_stats"]["usage"]
-        mem_limit = stats["memory_stats"]["limit"]
-        mem_percent = (mem_usage / mem_limit) * 100.0
+        memory_stats = stats.get("memory_stats", {})
+        mem_usage = memory_stats.get("usage", 0)
+        mem_limit = memory_stats.get("limit", 0)
+        mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
         
         # Network I/O
-        net_stats = stats["networks"]["eth0"] if "networks" in stats and "eth0" in stats["networks"] else {"rx_bytes": 0, "tx_bytes": 0}
+        networks = stats.get("networks", {})
+        net_stats = networks.get("eth0", {"rx_bytes": 0, "tx_bytes": 0})
         
         # Block I/O
         io_stats = {"read_bytes": 0, "write_bytes": 0}
-        if "blkio_stats" in stats and "io_service_bytes_recursive" in stats["blkio_stats"]:
-            for stat in stats["blkio_stats"]["io_service_bytes_recursive"]:
-                if stat["op"] == "Read":
-                    io_stats["read_bytes"] += stat["value"]
-                elif stat["op"] == "Write":
-                    io_stats["write_bytes"] += stat["value"]
+        if "blkio_stats" in stats:
+            for stat in stats["blkio_stats"].get("io_service_bytes_recursive", []):
+                if stat.get("op") == "Read":
+                    io_stats["read_bytes"] += stat.get("value", 0)
+                elif stat.get("op") == "Write":
+                    io_stats["write_bytes"] += stat.get("value", 0)
         
         # Get container info
         info = container.attrs
@@ -241,22 +260,14 @@ def get_container_metrics(container) -> dict:
             "mem_usage": mem_usage,
             "mem_limit": mem_limit,
             "mem_percent": round(mem_percent, 2),
-            "net_rx": net_stats["rx_bytes"],
-            "net_tx": net_stats["tx_bytes"],
+            "net_rx": net_stats.get("rx_bytes", 0),
+            "net_tx": net_stats.get("tx_bytes", 0),
             "block_read": io_stats["read_bytes"],
             "block_write": io_stats["write_bytes"],
-            "pids": stats["pids_stats"]["current"] if "pids_stats" in stats else 0,
-            "restarts": info["RestartCount"] if "RestartCount" in info else 0
+            "pids": stats.get("pids_stats", {}).get("current", 0),
+            "restarts": info.get("RestartCount", 0)
         }
     except Exception as e:
         return {
             "error": str(e)
-        }
-
-def format_bytes(bytes_value: int) -> str:
-    """Format bytes into human readable format."""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if bytes_value < 1024:
-            return f"{bytes_value:.2f} {unit}"
-        bytes_value /= 1024
-    return f"{bytes_value:.2f} PB" 
+        } 

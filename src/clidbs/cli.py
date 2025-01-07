@@ -26,7 +26,9 @@ from .style import (
     print_supported_dbs,
     print_action,
     print_help_menu,
-    print_db_metrics
+    print_db_metrics,
+    print_backup_list,
+    print_backup_result
 )
 from .functions import (
     check_docker_available,
@@ -46,6 +48,7 @@ from .functions.docker_utils import (
     remove_container_if_exists,
     get_container_metrics
 )
+from .functions.backup_utils import backup_manager
 
 from . import __version__
 
@@ -796,6 +799,49 @@ def metrics(db_name: str, watch: bool):
             
     except Exception as e:
         print_error(f"Failed to get metrics: {str(e)}")
+
+@main.command()
+@click.argument('db_name')
+@click.option('--description', help='Description of the backup')
+def backup(db_name: str, description: Optional[str] = None):
+    """Create a backup of a database.
+    
+    Example: clidb backup mydb --description "Before major update"
+    """
+    success = backup_manager.create_backup(db_name, description)
+    print_backup_result("Backup", db_name, success)
+
+@main.command()
+@click.argument('db_name')
+@click.argument('timestamp')
+def restore(db_name: str, timestamp: str):
+    """Restore a database from backup.
+    
+    Example: clidb restore mydb 20240101_120000
+    """
+    success = backup_manager.restore_backup(db_name, timestamp)
+    print_backup_result("Restore", db_name, success, timestamp)
+
+@main.command(name='backups')
+@click.option('--db', help='Filter backups by database name')
+def list_backups(db: Optional[str] = None):
+    """List available backups.
+    
+    Example: clidb backups --db mydb
+    """
+    backups = backup_manager.list_backups(db)
+    print_backup_list(backups)
+
+@main.command()
+@click.argument('db_name')
+@click.argument('timestamp')
+def delete_backup(db_name: str, timestamp: str):
+    """Delete a backup.
+    
+    Example: clidb delete-backup mydb 20240101_120000
+    """
+    success = backup_manager.delete_backup(db_name, timestamp)
+    print_backup_result("Delete backup", db_name, success, timestamp)
 
 if __name__ == '__main__':
     main() 
