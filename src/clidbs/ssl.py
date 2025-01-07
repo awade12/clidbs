@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 import docker
 import time
-from .style import print_action
+from .style import print_action, print_success
 
 class SSLManager:
     def __init__(self):
@@ -287,6 +287,34 @@ ssl_min_protocol_version = 'TLSv1.2'
                     except:
                         pass
                     return False, f"postgres ssl setup failed: {str(e)}"
+
+            if success:
+                print_success(f"""SSL setup successful for {domain}
+
+To verify your SSL setup, you can use these commands:
+
+1. OpenSSL verification:
+   openssl s_client -connect {domain}:5432 -starttls postgres
+
+2. PostgreSQL SSL connection:
+   PGSSLMODE=verify-full psql "postgresql://[username]:[password]@{domain}:{port}/[dbname]"
+
+3. Python SSL test:
+   # Save this as test_ssl.py and run with: python3 test_ssl.py
+   import psycopg2
+   conn = psycopg2.connect(
+       dbname='[dbname]',
+       user='[username]',
+       password='[password]',
+       host='{domain}',
+       port={port},
+       sslmode='verify-full'
+   )
+   with conn.cursor() as cur:
+       cur.execute('SHOW ssl')
+       print(f"SSL enabled: {{cur.fetchone()[0]}}")
+       print(f"SSL cipher: {{conn.info.ssl_cipher}}")
+""")
 
             return True, "ssl setup done"
         except Exception as e:
