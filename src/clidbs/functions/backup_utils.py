@@ -9,6 +9,7 @@ import docker
 from .docker_utils import find_container
 from .print_utils import print_error, print_warning, print_success, print_action
 from ..databases import get_database_config, DatabaseCredentials, credentials_manager
+import subprocess
 
 class BackupManager:
     """Manages database backups and restores."""
@@ -68,21 +69,57 @@ class BackupManager:
             
             # Create backup based on database type
             if creds.db_type == "postgres":
-                cmd = f"pg_dump -U {creds.user} -h localhost -p {creds.port} {db_name} > {backup_path}"
+                # Use docker exec to run pg_dump inside the container
+                cmd = [
+                    "docker", "exec",
+                    "-e", f"PGPASSWORD={creds.password}",
+                    container.name,
+                    "pg_dump",
+                    "-U", creds.user,
+                    "-d", db_name,
+                    "-F", "c"  # Use custom format for better compression
+                ]
+                
+                # Execute pg_dump and save output to file
+                with open(backup_path, 'wb') as f:
+                    result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE)
+                    if result.returncode != 0:
+                        raise Exception(f"pg_dump failed: {result.stderr.decode()}")
+                    
             elif creds.db_type == "mysql" or creds.db_type == "mariadb":
-                cmd = f"mysqldump -u {creds.user} -p{creds.password} -h localhost -P {creds.port} {db_name} > {backup_path}"
+                # Use docker exec for MySQL backup
+                cmd = [
+                    "docker", "exec",
+                    "-e", f"MYSQL_PWD={creds.password}",
+                    container.name,
+                    "mysqldump",
+                    "-u", creds.user,
+                    db_name
+                ]
+                
+                with open(backup_path, 'wb') as f:
+                    result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE)
+                    if result.returncode != 0:
+                        raise Exception(f"mysqldump failed: {result.stderr.decode()}")
+                    
             elif creds.db_type == "mongo":
-                cmd = f"mongodump --uri='mongodb://{creds.user}:{creds.password}@localhost:{creds.port}/{db_name}' --archive={backup_path}"
+                # Use docker exec for MongoDB backup
+                cmd = [
+                    "docker", "exec",
+                    container.name,
+                    "mongodump",
+                    "--uri", f"mongodb://{creds.user}:{creds.password}@localhost:27017/{db_name}",
+                    "--archive"
+                ]
+                
+                with open(backup_path, 'wb') as f:
+                    result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE)
+                    if result.returncode != 0:
+                        raise Exception(f"mongodump failed: {result.stderr.decode()}")
             else:
                 # For other databases, just copy the data directory
                 data_dir = container.attrs['Mounts'][0]['Source']
                 shutil.copytree(data_dir, backup_path)
-
-            # Execute backup command if needed
-            if cmd:
-                exit_code = container.exec_run(cmd).exit_code
-                if exit_code != 0:
-                    raise Exception(f"Backup command failed with exit code {exit_code}")
 
             # Store backup metadata
             if db_name not in self.metadata:

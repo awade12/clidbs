@@ -1,4 +1,4 @@
-"""General utility functions."""
+"""some random utils func"""
 
 def format_bytes(bytes_value: int) -> str:
     """Format bytes into human readable format."""

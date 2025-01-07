@@ -4,7 +4,6 @@ import socket
 
 def get_host_ip() -> str:
     """Get the host's public IP address."""
-    # First try to get the IP from environment variable
     if os.getenv("CLIDB_HOST_IP"):
         return os.getenv("CLIDB_HOST_IP")
     

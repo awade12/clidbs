@@ -3,13 +3,15 @@ import shutil
 import subprocess
 import os
 import platform
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import docker
 import socket
 import psutil
 from datetime import datetime
 from .utils import format_bytes
 from .print_utils import print_error, print_warning, print_success, print_action
+from docker.client import DockerClient
+from docker.models.containers import Container
 
 def run_command(cmd: str) -> tuple[int, str, str]:
     """Run a shell command and return exit code, stdout, and stderr."""
@@ -137,137 +139,112 @@ Manual installation instructions:
 4. Run 'clidb install-docker' again to configure Docker
 """) 
 
-def is_port_available(port: int) -> bool:
-    """Check if a port is available."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(('', port))
-            return True
-        except OSError:
-            return False
-
-def find_next_available_port(start_port: int, max_attempts: int = 100) -> Optional[int]:
-    """
-    Find the next available port starting from start_port.
+def find_container(client: DockerClient, db_name: str) -> Optional[Container]:
+    """Find a container by database name.
     
     Args:
-        start_port: Port to start searching from
-        max_attempts: Maximum number of ports to try
+        client: Docker client
+        db_name: Name of the database
         
     Returns:
-        Next available port or None if no ports are available
+        Container object if found, None otherwise
+    """
+    # List all containers (including stopped ones)
+    containers = client.containers.list(all=True)
+    
+    # Look for container with our naming pattern
+    for container in containers:
+        # Check if container name starts with clidb-*-{db_name}
+        parts = container.name.split('-')
+        if len(parts) >= 3 and parts[0] == 'clidb' and parts[-1] == db_name:
+            return container
+    
+    return None
+
+def is_port_available(port: int) -> bool:
+    """Check if a port is available on localhost."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('localhost', port))
+            return True
+    except:
+        return False
+
+def find_next_available_port(start_port: int, max_attempts: int = 100) -> Optional[int]:
+    """Find the next available port starting from start_port.
+    
+    Args:
+        start_port: Port to start checking from
+        max_attempts: Maximum number of ports to check
+        
+    Returns:
+        Available port number or None if none found
     """
     for port in range(start_port, start_port + max_attempts):
         if is_port_available(port):
             return port
-    return None 
+    return None
 
-def check_container_exists(client: docker.DockerClient, name: str) -> bool:
-    """Check if a container with the given name exists (running or stopped)."""
+def check_container_exists(client: DockerClient, container_name: str) -> bool:
+    """Check if a container exists."""
     try:
-        containers = client.containers.list(all=True)  # all=True includes stopped containers
-        return any(container.name == name for container in containers)
-    except Exception:
-        return False
-
-def remove_container_if_exists(client: docker.DockerClient, name: str) -> bool:
-    """
-    Remove a container if it exists (running or stopped).
-    
-    Args:
-        client: Docker client
-        name: Container name
-        
-    Returns:
-        bool: True if container was removed, False if it didn't exist
-    """
-    try:
-        container = client.containers.get(name)
-        container.remove(force=True)  # force=True will stop it if running
+        client.containers.get(container_name)
         return True
     except docker.errors.NotFound:
         return False
-    except Exception as e:
-        raise Exception(f"Failed to remove existing container: {str(e)}") 
 
-def get_container_metrics(container) -> dict:
-    """
-    Get detailed metrics for a container.
-    
-    Args:
-        container: Docker container object
-        
-    Returns:
-        Dictionary containing metrics
-    """
+def remove_container_if_exists(client: DockerClient, container_name: str):
+    """Remove a container if it exists."""
+    try:
+        container = client.containers.get(container_name)
+        container.remove(force=True)
+    except docker.errors.NotFound:
+        pass
+
+def get_container_metrics(container: Container) -> Dict[str, Any]:
+    """Get container metrics including CPU, memory, network, and disk I/O."""
     try:
         # Get container stats
         stats = container.stats(stream=False)
         
-        # CPU Usage - handle different Docker versions and configurations
+        # Calculate CPU usage percentage
+        cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
+        system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
         cpu_percent = 0.0
-        try:
-            cpu_stats = stats.get("cpu_stats", {})
-            precpu_stats = stats.get("precpu_stats", {})
-            
-            cpu_usage = cpu_stats.get("cpu_usage", {})
-            precpu_usage = precpu_stats.get("cpu_usage", {})
-            
-            cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
-            system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
-            
-            if system_delta > 0:
-                num_cpus = len(cpu_usage.get("percpu_usage", [])) or os.cpu_count() or 1
-                cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
-        except Exception:
-            # Fallback to psutil if Docker stats are not available
-            try:
-                process = psutil.Process(container.attrs['State']['Pid'])
-                cpu_percent = process.cpu_percent(interval=0.1)
-            except Exception:
-                cpu_percent = 0.0
+        if system_delta > 0:
+            cpu_percent = (cpu_delta / system_delta) * len(stats['cpu_stats']['cpu_usage']['percpu_usage']) * 100.0
         
-        # Memory Usage
-        memory_stats = stats.get("memory_stats", {})
-        mem_usage = memory_stats.get("usage", 0)
-        mem_limit = memory_stats.get("limit", 0)
-        mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
+        # Calculate memory usage
+        mem_usage = stats['memory_stats']['usage']
+        mem_limit = stats['memory_stats']['limit']
+        mem_percent = (mem_usage / mem_limit) * 100.0
         
-        # Network I/O
-        networks = stats.get("networks", {})
-        net_stats = networks.get("eth0", {"rx_bytes": 0, "tx_bytes": 0})
+        # Get network I/O
+        networks = stats['networks'] if 'networks' in stats else {}
+        net_rx = sum(net['rx_bytes'] for net in networks.values()) if networks else 0
+        net_tx = sum(net['tx_bytes'] for net in networks.values()) if networks else 0
         
-        # Block I/O
-        io_stats = {"read_bytes": 0, "write_bytes": 0}
-        if "blkio_stats" in stats:
-            for stat in stats["blkio_stats"].get("io_service_bytes_recursive", []):
-                if stat.get("op") == "Read":
-                    io_stats["read_bytes"] += stat.get("value", 0)
-                elif stat.get("op") == "Write":
-                    io_stats["write_bytes"] += stat.get("value", 0)
+        # Get block I/O
+        block_io = stats['blkio_stats']['io_service_bytes_recursive']
+        block_read = sum(io['value'] for io in block_io if io['op'] == 'Read') if block_io else 0
+        block_write = sum(io['value'] for io in block_io if io['op'] == 'Write') if block_io else 0
         
         # Get container info
         info = container.attrs
         
-        # Format uptime
-        created = datetime.strptime(info["Created"].split(".")[0], "%Y-%m-%dT%H:%M:%S")
-        uptime = datetime.now() - created
-        
         return {
-            "status": info["State"]["Status"],
-            "uptime": str(uptime).split(".")[0],  # Remove microseconds
+            "status": container.status,
+            "uptime": info['State']['StartedAt'],
+            "restarts": info['RestartCount'],
+            "pids": len(psutil.Process().children()),
             "cpu_percent": round(cpu_percent, 2),
             "mem_usage": mem_usage,
             "mem_limit": mem_limit,
             "mem_percent": round(mem_percent, 2),
-            "net_rx": net_stats.get("rx_bytes", 0),
-            "net_tx": net_stats.get("tx_bytes", 0),
-            "block_read": io_stats["read_bytes"],
-            "block_write": io_stats["write_bytes"],
-            "pids": stats.get("pids_stats", {}).get("current", 0),
-            "restarts": info.get("RestartCount", 0)
+            "net_rx": net_rx,
+            "net_tx": net_tx,
+            "block_read": block_read,
+            "block_write": block_write
         }
     except Exception as e:
-        return {
-            "error": str(e)
-        } 
+        return {"error": str(e)} 
