@@ -1,3 +1,3 @@
-"""CLIDB - Simple Database Management CLI"""
+""" clidb - simple/not bloated db management """
 
-__version__ = "2.2.0" 
+__version__ = "2.12.0" 

@@ -178,6 +178,11 @@ def print_help_menu():
         "Setup SSL for a database",
         "clidb ssl mydb example.com --email admin@example.com"
     )
+    table.add_row(
+        "install-docker",
+        "Install Docker automatically",
+        "clidb install-docker"
+    )
     
     options_table = Table(
         title="[bold blue]Common Options[/bold blue]",

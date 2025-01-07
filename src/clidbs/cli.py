@@ -1,11 +1,17 @@
 import click
 from click import Context
-import docker
 import os
 import secrets
 import string
 import socket
-from typing import Optional, List
+import shutil
+import platform
+import subprocess
+from typing import Optional, List, Tuple
+import docker
+from docker.client import DockerClient
+from docker.models.containers import Container
+
 from .notifications import send_discord_notification
 from .config import Config
 from .databases import (
@@ -15,7 +21,6 @@ from .databases import (
     DatabaseCredentials,
     credentials_manager
 )
-from .ssl import ssl_manager
 from .style import (
     print_success,
     print_error,
@@ -27,6 +32,50 @@ from .style import (
     print_help_menu
 )
 
+# Global to store the SSL manager instance
+_ssl_manager = None
+
+def get_ssl_manager():
+    """Lazy load the SSL manager after Docker checks."""
+    global _ssl_manager
+    if _ssl_manager is None:
+        from .ssl import ssl_manager
+        _ssl_manager = ssl_manager
+    return _ssl_manager
+
+def check_docker_available():
+    """Check if Docker is installed and provide installation instructions if not."""
+    if not shutil.which('docker'):
+        print_error("""
+Docker is not installed! CLIDB requires Docker to run databases.
+
+You can install Docker automatically by running:
+    clidb install-docker
+
+Or visit https://docs.docker.com/engine/install/ for manual installation instructions.
+""")
+        exit(1)
+
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()
+    except Exception as e:
+        print_error(f"""
+Docker is installed but not running or accessible!
+
+You can fix this by running:
+    clidb install-docker
+
+This will:
+1. Start the Docker service
+2. Enable Docker to start on boot
+3. Add your user to the docker group
+
+Error details: {str(e)}
+""")
+        exit(1)
+
 def generate_password(length: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
     return ''.join(secrets.choice(alphabet) for _ in range(length))
@@ -35,7 +84,7 @@ def get_container_name(db_type: str, db_name: str) -> str:
     """Convert db_name to full container name."""
     return f"clidb-{db_type}-{db_name}"
 
-def find_container(client: docker.DockerClient, db_name: str) -> Optional[docker.models.containers.Container]:
+def find_container(client: DockerClient, db_name: str) -> Optional[Container]:
     """Find a container by database name."""
     containers = client.containers.list(all=True)
     for container in containers:
@@ -46,7 +95,7 @@ def find_container(client: docker.DockerClient, db_name: str) -> Optional[docker
             return container
     return None
 
-def get_db_info(container_name: str) -> tuple:
+def get_db_info(container_name: str) -> Tuple[Optional[str], Optional[str]]:
     """Extract db_name and type from container name."""
     parts = container_name.split('-')
     if len(parts) >= 3 and parts[0] == "clidb":
@@ -116,6 +165,7 @@ class CLIDBGroup(click.Group):
 @click.group(cls=CLIDBGroup)
 def main():
     """Simple database management for your VPS."""
+    check_docker_available()
     pass
 
 @main.command()
@@ -133,7 +183,7 @@ def create(db_name: str, db_type: str, version: Optional[str], access: str, user
     Example: clidb create mydb --type postgres --version 16
     """
     try:
-        client = docker.from_env()
+        client: DockerClient = docker.from_env()
         
         # Get database configuration
         db_config = get_database_config(db_type, version)
@@ -479,7 +529,7 @@ def ssl(db_name: str, domain: str, email: str):
     """
     try:
         # Find the database
-        client = docker.from_env()
+        client: DockerClient = docker.from_env()
         container = find_container(client, db_name)
         
         if not container:
@@ -497,6 +547,7 @@ def ssl(db_name: str, domain: str, email: str):
         db_config = get_database_config(creds.db_type, creds.version)
         
         # Setup SSL
+        ssl_manager = get_ssl_manager()
         success, message = ssl_manager.setup_ssl(
             domain=domain,
             email=email,
@@ -552,13 +603,14 @@ def remove_ssl(db_name: str, domain: str):
     """
     try:
         # Find the database
-        client = docker.from_env()
+        client: DockerClient = docker.from_env()
         container = find_container(client, db_name)
         
         if not container:
             raise Exception(f"Database '{db_name}' not found")
         
         # Remove SSL
+        ssl_manager = get_ssl_manager()
         success, message = ssl_manager.remove_ssl(domain)
         
         if success:
@@ -577,6 +629,7 @@ def verify_domain(domain: str):
     Example: clidb verify-domain example.com
     """
     try:
+        ssl_manager = get_ssl_manager()
         success, message = ssl_manager.verify_domain(domain)
         if success:
             print_success(message)
@@ -584,6 +637,103 @@ def verify_domain(domain: str):
             print_error(message)
     except Exception as e:
         print_error(f"Domain verification failed: {str(e)}")
+
+def run_command(cmd: str) -> tuple[int, str, str]:
+    """Run a shell command and return exit code, stdout, and stderr."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=True,
+        text=True
+    )
+    stdout, stderr = process.communicate()
+    return process.returncode, stdout, stderr
+
+@main.command(name='install-docker')
+def install_docker():
+    """Install Docker automatically on this system.
+    
+    Example: clidb install-docker
+    """
+    system = platform.system().lower()
+    if system != "linux":
+        print_error("Automatic Docker installation is only supported on Linux systems.")
+        print_warning("Please visit https://docs.docker.com/engine/install/ for installation instructions.")
+        return
+
+    distro = ""
+    # Try to detect Linux distribution
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("ID="):
+                    distro = line.split("=")[1].strip().strip('"')
+                    break
+
+    print_action("Installing", "Docker")
+    
+    try:
+        # First check if Docker is already installed
+        if shutil.which('docker'):
+            print_warning("Docker is already installed!")
+            
+            # Try to start Docker service
+            print_action("Starting", "Docker service")
+            run_command("sudo systemctl start docker")
+            run_command("sudo systemctl enable docker")
+            
+            # Add user to docker group
+            print_action("Adding", "user to docker group")
+            run_command(f"sudo usermod -aG docker {os.getenv('USER', os.getenv('SUDO_USER', 'root'))}")
+            
+            print_success("""
+Docker is now configured! For the changes to take effect:
+1. Log out of your current session
+2. Log back in
+3. Run 'docker ps' to verify everything works
+""")
+            return
+
+        # Install Docker using get.docker.com script (works for most Linux distributions)
+        print_action("Downloading", "Docker installation script")
+        code, out, err = run_command("curl -fsSL https://get.docker.com -o get-docker.sh")
+        if code != 0:
+            raise Exception(f"Failed to download Docker script: {err}")
+
+        print_action("Installing", "Docker")
+        code, out, err = run_command("sudo sh get-docker.sh")
+        if code != 0:
+            raise Exception(f"Failed to install Docker: {err}")
+
+        # Clean up installation script
+        os.remove("get-docker.sh")
+
+        # Start Docker service
+        print_action("Starting", "Docker service")
+        run_command("sudo systemctl start docker")
+        run_command("sudo systemctl enable docker")
+
+        # Add user to docker group
+        print_action("Adding", "user to docker group")
+        run_command(f"sudo usermod -aG docker {os.getenv('USER', os.getenv('SUDO_USER', 'root'))}")
+
+        print_success("""
+Docker has been successfully installed! For the changes to take effect:
+1. Log out of your current session
+2. Log back in
+3. Run 'docker ps' to verify everything works
+""")
+
+    except Exception as e:
+        print_error(f"Failed to install Docker: {str(e)}")
+        print_warning("""
+Manual installation instructions:
+1. Visit: https://docs.docker.com/engine/install/
+2. Choose your operating system
+3. Follow the installation steps
+4. Run 'clidb install-docker' again to configure Docker
+""")
 
 if __name__ == '__main__':
     main() 
