@@ -1,18 +1,12 @@
 import click
 from click import Context
 import os
-import secrets
-import string
-import socket
-import shutil
-import platform
-import subprocess
 from typing import Optional, List, Tuple, Any
 import docker
 from docker.client import DockerClient
-from docker.models.containers import Container
 import requests
 from packaging import version
+import time
 
 from .notifications import send_discord_notification
 from .config import Config
@@ -33,11 +27,21 @@ from .style import (
     print_action,
     print_help_menu
 )
+from .functions import (
+    check_docker_available,
+    install_docker,
+    get_container_name,
+    find_container,
+    get_db_info,
+    get_host_ip,
+    get_connection_string,
+    get_cli_command,
+    generate_password,
+    run_command
+)
 
-# Import version
 from . import __version__
 
-# Global to store the SSL manager instance
 _ssl_manager = None
 
 def get_ssl_manager():
@@ -47,131 +51,6 @@ def get_ssl_manager():
         from .ssl import ssl_manager
         _ssl_manager = ssl_manager
     return _ssl_manager
-
-def check_docker_available():
-    """Check if Docker is installed and provide installation instructions if not."""
-    if not shutil.which('docker'):
-        print_error("""
-Docker is not installed! CLIDB requires Docker to run databases.
-
-You can install Docker automatically by running:
-    clidb install-docker
-
-Or visit https://docs.docker.com/engine/install/ for manual installation instructions.
-""")
-        exit(1)
-
-    try:
-        import docker
-        client = docker.from_env()
-        client.ping()
-    except Exception as e:
-        print_error(f"""
-Docker is installed but not running or accessible!
-
-You can fix this by running:
-    clidb install-docker
-
-This will:
-1. Start the Docker service
-2. Enable Docker to start on boot
-3. Add your user to the docker group
-
-Error details: {str(e)}
-""")
-        exit(1)
-
-def generate_password(length: int = 16) -> str:
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-def get_container_name(db_type: str, db_name: str) -> str:
-    """Convert db_name to full container name."""
-    return f"clidb-{db_type}-{db_name}"
-
-def find_container(client: DockerClient, db_name: str) -> Optional[Container]:
-    """Find a container by database name."""
-    containers = client.containers.list(all=True)
-    for container in containers:
-        # Split container name into parts
-        parts = container.name.split('-')
-        # Check if it's our container (starts with clidb- and ends with db_name)
-        if len(parts) >= 3 and parts[0] == "clidb" and '-'.join(parts[2:]) == db_name:
-            return container
-    return None
-
-def get_db_info(container_name: str) -> Tuple[Optional[str], Optional[str]]:
-    """Extract db_name and type from container name."""
-    parts = container_name.split('-')
-    if len(parts) >= 3 and parts[0] == "clidb":
-        db_type = parts[1]
-        db_name = '-'.join(parts[2:])
-        return db_name, db_type
-    return None, None
-
-def get_host_ip() -> str:
-    """Get the host's public IP address."""
-    # First try to get the IP from environment variable
-    if os.getenv("CLIDB_HOST_IP"):
-        return os.getenv("CLIDB_HOST_IP")
-    
-    try:
-        # Try to get the host's IP by creating a dummy connection
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "localhost"
-
-def get_connection_string(db_type: str, host: str, port: int, user: str, password: str, db_name: str) -> str:
-    """Generate a connection string based on database type."""
-    if db_type == 'postgres':
-        return f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
-    elif db_type == 'mysql' or db_type == 'mariadb':
-        return f"mysql://{user}:{password}@{host}:{port}/{db_name}"
-    elif db_type == 'mongo':
-        return f"mongodb://{user}:{password}@{host}:{port}/{db_name}"
-    elif db_type == 'redis' or db_type == 'keydb':
-        return f"redis://:{password}@{host}:{port}"
-    elif db_type == 'neo4j':
-        return f"neo4j://{user}:{password}@{host}:{port}"
-    elif db_type == 'clickhouse':
-        return f"clickhouse://{user}:{password}@{host}:{port}/{db_name}"
-    return ""
-
-def get_cli_command(db_type: str, host: str, port: int, user: str, password: str, db_name: str) -> str:
-    """Generate CLI command based on database type."""
-    if db_type == 'postgres':
-        return f"psql -h {host} -p {port} -U {user} -d {db_name}  # Password: {password}"
-    elif db_type == 'mysql' or db_type == 'mariadb':
-        return f"mysql -h {host} -P {port} -u {user} -p{password} {db_name}"
-    elif db_type == 'mongo':
-        return f"mongosh {host}:{port}/{db_name} -u {user} -p {password}"
-    elif db_type == 'redis':
-        return f"redis-cli -h {host} -p {port} -a {password}"
-    elif db_type == 'keydb':
-        return f"keydb-cli -h {host} -p {port} -a {password}"
-    elif db_type == 'neo4j':
-        return f"cypher-shell -a {host}:{port} -u {user} -p {password}"
-    elif db_type == 'clickhouse':
-        return f"clickhouse-client --host {host} --port {port} --user {user} --password {password} --database {db_name}"
-    return ""
-
-class CLIDBGroup(click.Group):
-    """Custom group class for CLIDB that provides styled help."""
-    
-    def get_help(self, ctx: Context) -> str:
-        """Override to show our styled help instead of Click's default."""
-        check_for_updates()  # Check for updates before showing help
-        print_help_menu()
-        return ""
-
-    def invoke(self, ctx: Context) -> Any:
-        """Override to check for updates before any command."""
-        check_for_updates()  # Check for updates before any command
-        return super().invoke(ctx)
 
 def check_for_updates():
     """Check if there's a newer version available on PyPI."""
@@ -194,10 +73,27 @@ To upgrade, run:
         # Silently fail if we can't check for updates
         pass
 
+class CLIDBGroup(click.Group):
+    """Custom group class for CLIDB that provides styled help."""
+    
+    def get_help(self, ctx: Context) -> str:
+        """Override to show our styled help instead of Click's default."""
+        check_for_updates()  # Check for updates before showing help
+        print_help_menu()
+        return ""
+
+    def invoke(self, ctx: Context) -> Any:
+        """Override to check for updates before any command."""
+        check_for_updates()  # Check for updates before any command
+        return super().invoke(ctx)
+
 @click.group(cls=CLIDBGroup)
 def main():
     """Simple database management for your VPS."""
-    check_docker_available()
+    # Skip Docker check for install-docker command
+    ctx = click.get_current_context()
+    if ctx.invoked_subcommand != 'install-docker':
+        check_docker_available()
     pass
 
 @main.command()
@@ -466,9 +362,11 @@ def stop(db_name: str, discord_webhook: Optional[str]):
 
 @main.command()
 @click.argument('db_name')
-@click.option('--discord-webhook', help='Discord webhook URL for notifications')
-def start(db_name: str, discord_webhook: Optional[str]):
-    """Start a stopped database."""
+def start(db_name: str):
+    """Start a stopped database.
+    
+    Example: clidb start mydb
+    """
     try:
         client = docker.from_env()
         container = find_container(client, db_name)
@@ -476,22 +374,23 @@ def start(db_name: str, discord_webhook: Optional[str]):
         if not container:
             raise Exception(f"Database '{db_name}' not found")
         
+        # Try to start the container
         container.start()
+        
+        # Wait a bit and check if it's actually running
+        time.sleep(5)  # Give it time to start
+        container.reload()  # Refresh container state
+        
+        if container.status != 'running':
+            # Get the logs to see what went wrong
+            logs = container.logs(tail=50).decode()
+            raise Exception(f"Container failed to start. Logs:\n{logs}")
+        
         print_action("Start", db_name)
         
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Database '{db_name}' started successfully"
-            )
     except Exception as e:
-        print_action("Start", db_name, success=False)
-        print_error(str(e))
-        if discord_webhook:
-            send_discord_notification(
-                webhook_url=discord_webhook,
-                message=f"Failed to start database '{db_name}': {str(e)}"
-            )
+        print_error(f"Failed to start database: {str(e)}")
+        return
 
 @main.command()
 @click.argument('db_name')
@@ -670,102 +569,132 @@ def verify_domain(domain: str):
     except Exception as e:
         print_error(f"Domain verification failed: {str(e)}")
 
-def run_command(cmd: str) -> tuple[int, str, str]:
-    """Run a shell command and return exit code, stdout, and stderr."""
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=True,
-        text=True
-    )
-    stdout, stderr = process.communicate()
-    return process.returncode, stdout, stderr
-
 @main.command(name='install-docker')
-def install_docker():
+def install_docker_command():
     """Install Docker automatically on this system.
     
     Example: clidb install-docker
     """
-    system = platform.system().lower()
-    if system != "linux":
-        print_error("Automatic Docker installation is only supported on Linux systems.")
-        print_warning("Please visit https://docs.docker.com/engine/install/ for installation instructions.")
-        return
+    install_docker()
 
-    distro = ""
-    # Try to detect Linux distribution
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release") as f:
-            for line in f:
-                if line.startswith("ID="):
-                    distro = line.split("=")[1].strip().strip('"')
-                    break
-
-    print_action("Installing", "Docker")
+@main.command()
+@click.argument('db_name')
+def logs(db_name: str):
+    """Show logs for a database.
     
+    Example: clidb logs mydb
+    """
     try:
-        # First check if Docker is already installed
-        if shutil.which('docker'):
-            print_warning("Docker is already installed!")
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+        
+        # Get all logs
+        logs = container.logs(tail=100).decode()
+        print_success(f"Logs for database '{db_name}':")
+        print(logs)
             
-            # Try to start Docker service
-            print_action("Starting", "Docker service")
-            run_command("sudo systemctl start docker")
-            run_command("sudo systemctl enable docker")
-            
-            # Add user to docker group
-            print_action("Adding", "user to docker group")
-            run_command(f"sudo usermod -aG docker {os.getenv('USER', os.getenv('SUDO_USER', 'root'))}")
-            
-            print_success("""
-Docker is now configured! For the changes to take effect:
-1. Log out of your current session
-2. Log back in
-3. Run 'docker ps' to verify everything works
-""")
-            return
-
-        # Install Docker using get.docker.com script (works for most Linux distributions)
-        print_action("Downloading", "Docker installation script")
-        code, out, err = run_command("curl -fsSL https://get.docker.com -o get-docker.sh")
-        if code != 0:
-            raise Exception(f"Failed to download Docker script: {err}")
-
-        print_action("Installing", "Docker")
-        code, out, err = run_command("sudo sh get-docker.sh")
-        if code != 0:
-            raise Exception(f"Failed to install Docker: {err}")
-
-        # Clean up installation script
-        os.remove("get-docker.sh")
-
-        # Start Docker service
-        print_action("Starting", "Docker service")
-        run_command("sudo systemctl start docker")
-        run_command("sudo systemctl enable docker")
-
-        # Add user to docker group
-        print_action("Adding", "user to docker group")
-        run_command(f"sudo usermod -aG docker {os.getenv('USER', os.getenv('SUDO_USER', 'root'))}")
-
-        print_success("""
-Docker has been successfully installed! For the changes to take effect:
-1. Log out of your current session
-2. Log back in
-3. Run 'docker ps' to verify everything works
-""")
-
     except Exception as e:
-        print_error(f"Failed to install Docker: {str(e)}")
-        print_warning("""
-Manual installation instructions:
-1. Visit: https://docs.docker.com/engine/install/
-2. Choose your operating system
-3. Follow the installation steps
-4. Run 'clidb install-docker' again to configure Docker
-""")
+        print_error(f"Failed to get logs: {str(e)}")
+
+@main.command()
+@click.argument('db_name')
+def inspect(db_name: str):
+    """Show detailed information about a database.
+    
+    Example: clidb inspect mydb
+    """
+    try:
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+        
+        # Get container info
+        info = container.attrs
+        
+        # Get credentials
+        creds = credentials_manager.get_credentials(db_name)
+        
+        print_success(f"Details for database '{db_name}':")
+        print("\nContainer Status:")
+        print(f"Status: {info['State']['Status']}")
+        print(f"Running: {info['State']['Running']}")
+        print(f"Started At: {info['State']['StartedAt']}")
+        print(f"Error: {info['State']['Error']}")
+        
+        if creds:
+            print("\nDatabase Credentials:")
+            print(f"Type: {creds.db_type}")
+            print(f"Version: {creds.version or 'latest'}")
+            print(f"User: {creds.user}")
+            print(f"Password: {creds.password}")
+            print(f"Port: {creds.port}")
+            print(f"Host: {creds.host}")
+            print(f"Access: {creds.access}")
+        
+        print("\nContainer Config:")
+        print(f"Image: {info['Config']['Image']}")
+        print(f"Command: {info['Config']['Cmd']}")
+        print("Environment:")
+        for env in info['Config']['Env']:
+            print(f"  {env}")
+            
+    except Exception as e:
+        print_error(f"Failed to inspect database: {str(e)}")
+
+@main.command()
+@click.argument('db_name')
+def recreate(db_name: str):
+    """Recreate a database container from its stored configuration.
+    
+    Example: clidb recreate mydb
+    """
+    try:
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        creds = credentials_manager.get_credentials(db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+            
+        if not creds:
+            raise Exception(f"No credentials found for database '{db_name}'")
+        
+        # Get database configuration
+        db_config = get_database_config(creds.db_type, creds.version)
+        
+        # Remove old container
+        print_action("Removing", "old container")
+        container.remove(force=True)
+        
+        # Prepare new container configuration
+        container_config = {
+            'image': db_config.image,
+            'name': get_container_name(creds.db_type, db_name),
+            'environment': db_config.get_env_vars(db_name, creds.user, creds.password),
+            'ports': {f'{db_config.default_port}/tcp': creds.port},
+            'network_mode': 'bridge' if creds.access == 'public' else 'host',
+            'detach': True
+        }
+        
+        # Add optional configurations
+        if db_config.volumes:
+            container_config['volumes'] = db_config.volumes
+        if db_config.command:
+            container_config['command'] = db_config.command
+        
+        # Create and start new container
+        print_action("Creating", "new container")
+        container = client.containers.run(**container_config)
+        
+        print_success(f"Database '{db_name}' recreated successfully")
+            
+    except Exception as e:
+        print_error(f"Failed to recreate database: {str(e)}")
 
 if __name__ == '__main__':
     main() 

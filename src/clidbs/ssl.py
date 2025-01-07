@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 import docker
 import time
+from .style import print_action
 
 class SSLManager:
     def __init__(self):
@@ -178,27 +179,113 @@ server {{
             if db_type == 'postgres':
                 try:
                     container = self.docker_client.containers.get(container_name)
+                    
+                    # Make sure container is running first
+                    if container.status != 'running':
+                        print_action("Starting", f"database '{container_name}'")
+                        container.start()
+                        time.sleep(5)  # Give it time to start
+                        container.reload()
+                        
+                        if container.status != 'running':
+                            # Get logs to see why it won't start
+                            logs = container.logs(tail=50).decode()
+                            raise Exception(f"Unable to start database container. Logs:\n{logs}")
+                    
                     cert_path = f"/etc/letsencrypt/live/{domain}"
                     
-                    container.exec_run("mkdir -p /var/lib/postgresql/ssl")
+                    # Create a temporary directory to prepare the archive
+                    temp_dir = "/tmp/postgres-ssl"
+                    os.makedirs(temp_dir, exist_ok=True)
                     
-                    with open(f"{cert_path}/fullchain.pem", 'rb') as f:
-                        container.put_archive("/var/lib/postgresql/ssl", f.read())
-                    with open(f"{cert_path}/privkey.pem", 'rb') as f:
-                        container.put_archive("/var/lib/postgresql/ssl", f.read())
+                    # Copy certificates to temp directory
+                    subprocess.run(f"cp {cert_path}/fullchain.pem {temp_dir}/", shell=True, check=True)
+                    subprocess.run(f"cp {cert_path}/privkey.pem {temp_dir}/", shell=True, check=True)
                     
-                    container.exec_run("chown -R postgres:postgres /var/lib/postgresql/ssl")
-                    container.exec_run("chmod 600 /var/lib/postgresql/ssl/privkey.pem")
+                    # Create tar archive (without compression for better compatibility)
+                    subprocess.run(f"cd {temp_dir} && tar -cf /tmp/ssl.tar *", shell=True, check=True)
                     
+                    # Read the tar file
+                    with open("/tmp/ssl.tar", "rb") as f:
+                        data = f.read()
+                    
+                    # Create directory in container
+                    result = container.exec_run("mkdir -p /var/lib/postgresql/ssl")
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to create SSL directory: {result.output.decode()}")
+                    
+                    # Copy archive to container
+                    success = container.put_archive("/var/lib/postgresql/ssl", data)
+                    if not success:
+                        raise Exception("Failed to copy SSL certificates to container")
+                    
+                    # Verify files exist
+                    result = container.exec_run("ls -l /var/lib/postgresql/ssl/")
+                    if result.exit_code != 0 or b'fullchain.pem' not in result.output or b'privkey.pem' not in result.output:
+                        raise Exception(f"SSL files not properly copied: {result.output.decode()}")
+                    
+                    # Set permissions in container
+                    result = container.exec_run("chown -R postgres:postgres /var/lib/postgresql/ssl")
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to set SSL directory ownership: {result.output.decode()}")
+                    
+                    result = container.exec_run("chmod 600 /var/lib/postgresql/ssl/privkey.pem")
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to set SSL key permissions: {result.output.decode()}")
+                    
+                    # Backup existing config
+                    result = container.exec_run("cp /var/lib/postgresql/data/postgresql.conf /var/lib/postgresql/data/postgresql.conf.bak")
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to backup PostgreSQL config: {result.output.decode()}")
+                    
+                    # Update PostgreSQL config
                     ssl_conf = """
+# SSL configuration
 ssl = on
 ssl_cert_file = '/var/lib/postgresql/ssl/fullchain.pem'
 ssl_key_file = '/var/lib/postgresql/ssl/privkey.pem'
+ssl_prefer_server_ciphers = on
+ssl_min_protocol_version = 'TLSv1.2'
 """
-                    container.exec_run(f'bash -c "echo \'{ssl_conf}\' >> /var/lib/postgresql/data/postgresql.conf"')
+                    # First, remove any existing SSL configuration
+                    result = container.exec_run("sed -i '/^# SSL configuration/,/^$/d' /var/lib/postgresql/data/postgresql.conf")
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to clean existing SSL config: {result.output.decode()}")
+
+                    # Write the config to a temporary file in the container
+                    result = container.exec_run('bash -c "cat > /tmp/ssl.conf << \'EOF\'\n' + ssl_conf + '\nEOF"')
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to create SSL config: {result.output.decode()}")
                     
+                    # Append the config using cat
+                    result = container.exec_run('bash -c "cat /tmp/ssl.conf >> /var/lib/postgresql/data/postgresql.conf"')
+                    if result.exit_code != 0:
+                        raise Exception(f"Failed to update PostgreSQL config: {result.output.decode()}")
+                    
+                    # Clean up the temporary file
+                    container.exec_run('rm /tmp/ssl.conf')
+                    
+                    # Clean up
+                    subprocess.run("rm -rf /tmp/postgres-ssl /tmp/ssl.tar", shell=True, check=True)
+                    
+                    # Restart container
                     container.restart()
+                    
+                    # Check if container is running after restart
+                    time.sleep(5)  # Give it time to start
+                    container.reload()
+                    if container.status != 'running':
+                        # Get logs to see what went wrong
+                        logs = container.logs(tail=50).decode()
+                        raise Exception(f"Container failed to start after SSL setup. Logs:\n{logs}")
+                    
                 except Exception as e:
+                    # Try to restore config if it was backed up
+                    try:
+                        container.exec_run("mv /var/lib/postgresql/data/postgresql.conf.bak /var/lib/postgresql/data/postgresql.conf")
+                        container.restart()
+                    except:
+                        pass
                     return False, f"postgres ssl setup failed: {str(e)}"
 
             return True, "ssl setup done"
