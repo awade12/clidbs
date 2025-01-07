@@ -843,5 +843,13 @@ def delete_backup(db_name: str, timestamp: str):
     success = backup_manager.delete_backup(db_name, timestamp)
     print_backup_result("Delete backup", db_name, success, timestamp)
 
+@main.command()
+def version():
+    """Show the current version of CLIDB.
+    
+    Example: clidb version
+    """
+    print_success(f"CLIDB version {__version__}")
+
 if __name__ == '__main__':
     main() 

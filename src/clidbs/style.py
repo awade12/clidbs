@@ -192,6 +192,11 @@ def print_help_menu():
         "Install Docker automatically",
         "clidb install-docker"
     )
+    table.add_row(
+        "version",
+        "Show the current version",
+        "clidb version"
+    )
     
     options_table = Table(
         title="[bold blue]Common Options[/bold blue]",

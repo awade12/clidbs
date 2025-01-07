@@ -6,7 +6,7 @@ from pathlib import Path
 
 @dataclass
 class DatabaseCredentials:
-    """Stored credentials for a database."""
+    """stores login info for a database"""
     db_type: str
     version: Optional[str]
     user: str
@@ -35,7 +35,7 @@ class DatabaseCredentials:
         return cls(**data)
 
 class CredentialsManager:
-    """Manage database credentials with secure file permissions."""
+    """handles saving and loading database passwords"""
     
     def __init__(self):
         self.config_dir = Path.home() / ".config" / "clidb"
@@ -44,24 +44,21 @@ class CredentialsManager:
         self._load_credentials()
 
     def _ensure_secure_directory(self):
-        """Ensure config directory exists with secure permissions."""
-        # Create directory if it doesn't exist
+        """create and lock down config folder"""
+        # create dir if needed
         self.config_dir.mkdir(parents=True, exist_ok=True)
         
-        # Set directory permissions to 700 (rwx------)
-        # Only owner can read, write, or access the directory
+        # only owner can access dir (700)
         self.config_dir.chmod(0o700)
 
     def _secure_file(self, path: Path):
-        """Set secure permissions on a file."""
-        # Set file permissions to 600 (rw-------)
-        # Only owner can read and write the file
+        """lock down file access"""
+        # only owner can read/write (600)
         path.chmod(0o600)
 
     def _load_credentials(self):
-        """Load credentials from file with secure permissions."""
+        """load saved passwords"""
         if self.creds_file.exists():
-            # Ensure file has secure permissions before reading
             self._secure_file(self.creds_file)
             with self.creds_file.open('r') as f:
                 self.credentials = {
@@ -72,8 +69,8 @@ class CredentialsManager:
             self.credentials = {}
 
     def _save_credentials(self):
-        """Save credentials to file with secure permissions."""
-        # Write to a temporary file first
+        """save passwords securely"""
+        # write to temp file first
         temp_file = self.creds_file.with_suffix('.tmp')
         with temp_file.open('w') as f:
             json.dump({
@@ -81,33 +78,33 @@ class CredentialsManager:
                 for name, creds in self.credentials.items()
             }, f, indent=2)
         
-        # Secure the temporary file
+        # lock down temp file
         self._secure_file(temp_file)
         
-        # Atomically replace the old file
+        # swap old file with new one
         temp_file.replace(self.creds_file)
         
-        # Ensure final file has correct permissions
+        # make sure perms are right
         self._secure_file(self.creds_file)
 
     def store_credentials(self, creds: DatabaseCredentials):
-        """Store credentials for a database."""
+        """save login info for a database"""
         self.credentials[creds.name] = creds
         self._save_credentials()
 
     def get_credentials(self, db_name: str) -> Optional[DatabaseCredentials]:
-        """Get credentials for a database."""
+        """get login info for a database"""
         return self.credentials.get(db_name)
 
     def remove_credentials(self, db_name: str):
-        """Remove credentials for a database."""
+        """delete login info for a database"""
         if db_name in self.credentials:
             del self.credentials[db_name]
             self._save_credentials()
 
 @dataclass
 class DatabaseConfig:
-    """Configuration for a database type."""
+    """settings for each type of database"""
     name: str
     image: str
     default_port: int
@@ -287,7 +284,7 @@ DATABASES: Dict[str, DatabaseConfig] = {
 }
 
 def get_database_config(db_type: str, version: Optional[str] = None) -> DatabaseConfig:
-    """Get database configuration by type and version."""
+    """get settings for a specific database type"""
     if db_type not in DATABASES:
         raise ValueError(f"Unsupported database type: {db_type}")
     
@@ -306,7 +303,7 @@ def get_database_config(db_type: str, version: Optional[str] = None) -> Database
     return config
 
 def list_supported_databases() -> str:
-    """Get a formatted string of supported databases and versions."""
+    """show all available databases and their versions"""
     output = []
     for db_type, config in DATABASES.items():
         versions = ", ".join(config.supported_versions) if config.supported_versions else "latest"
@@ -318,5 +315,4 @@ def list_supported_databases() -> str:
     
     return "\n".join(output) 
 
-# Initialize the credentials manager as a singleton
 credentials_manager = CredentialsManager() 
