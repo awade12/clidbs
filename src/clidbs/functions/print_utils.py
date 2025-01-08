@@ -4,30 +4,68 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.syntax import Syntax
 from rich.text import Text
-from rich.box import ROUNDED
+from rich.box import ROUNDED, HEAVY
 from rich.console import Group
+from rich.style import Style
 
 console = Console()
 
+# Status icons
+STATUS_ICONS = {
+    'success': '✅',
+    'error': '❌',
+    'warning': '⚠️',
+    'info': 'ℹ️'
+}
+
 def print_success(message: str):
     """green box for good news"""
-    console.print(Panel(message, style="green", box=ROUNDED))
+    console.print(Panel(
+        f"{message}",
+        style="green",
+        box=HEAVY,
+        border_style="green",
+        title="[bold green]Success[/bold green]",
+        title_align="left"
+    ))
 
 def print_error(message: str):
     """red box for errors"""
-    console.print(Panel(f"[red bold]Error:[/red bold] {message}", style="red", box=ROUNDED))
+    console.print(Panel(
+        f"{message}",
+        style="red",
+        box=HEAVY,
+        border_style="red",
+        title="[bold red]Error[/bold red]",
+        title_align="left"
+    ))
 
 def print_warning(message: str):
     """yellow box for warnings"""
-    console.print(Panel(f"[yellow bold]Warning:[/yellow bold] {message}", style="yellow", box=ROUNDED))
+    console.print(Panel(
+        f"{message}",
+        style="yellow",
+        box=HEAVY,
+        border_style="yellow",
+        title="[bold yellow]Warning[/bold yellow]",
+        title_align="left"
+    ))
 
 def print_action(action: str, db_name: str, success: bool = True):
     """quick status update with emoji"""
     if success:
-        emoji = "✅"
+        icon = STATUS_ICONS['success']
         color = "green"
+        status = "successful"
     else:
-        emoji = "❌"
+        icon = STATUS_ICONS['error']
         color = "red"
+        status = "failed"
     
-    console.print(f"[{color}]{emoji} {action} '{db_name}' {success and 'successful' or 'failed'}[/{color}]") 
+    console.print(Panel(
+        f"{icon} {action} '{db_name}' {status}",
+        style=color,
+        box=HEAVY,
+        border_style=color,
+        padding=(0, 1)
+    )) 

@@ -4,8 +4,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.syntax import Syntax
 from rich.text import Text
-from rich.box import ROUNDED
+from rich.box import ROUNDED, DOUBLE, HEAVY
 from rich.console import Group
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.live import Live
+from rich.status import Status
+from rich.style import Style
 from .functions.utils import format_bytes
 from .functions.print_utils import (
     console,
@@ -16,13 +20,93 @@ from .functions.print_utils import (
 )
 from typing import Optional
 
+# Icons for different database types
+DB_ICONS = {
+    'postgres': '🐘',
+    'mysql': '🐬',
+    'mariadb': '🐳',
+    'mongo': '🍃',
+    'redis': '⚡',
+    'keydb': '🔑',
+    'neo4j': '🕸️',
+    'clickhouse': '🏠',
+    'default': '💾'
+}
+
+# Status icons
+STATUS_ICONS = {
+    'running': '🟢',
+    'stopped': '🔴',
+    'paused': '🟡',
+    'error': '❌',
+    'success': '✅',
+    'warning': '⚠️',
+    'info': 'ℹ️',
+    'loading': '⏳',
+    'done': '🏁'
+}
+
+# Command category icons
+COMMAND_ICONS = {
+    'create': '🆕',
+    'list': '📋',
+    'info': 'ℹ️',
+    'metrics': '📊',
+    'start': '▶️',
+    'stop': '⏹️',
+    'remove': '🗑️',
+    'backup': '💾',
+    'restore': '📥',
+    'backups': '📦',
+    'delete-backup': '🗑️',
+    'supported': '📚',
+    'ssl': '🔒',
+    'install-docker': '🐳',
+    'version': '🏷️'
+}
+
+def get_db_icon(db_type: str) -> str:
+    """Get the icon for a database type."""
+    return DB_ICONS.get(db_type.lower(), DB_ICONS['default'])
+
+def get_status_icon(status: str) -> str:
+    """Get the icon for a status."""
+    return STATUS_ICONS.get(status.lower(), STATUS_ICONS['info'])
+
+def get_command_icon(command: str) -> str:
+    """Get the icon for a command."""
+    return COMMAND_ICONS.get(command.lower(), 'ℹ️')
+
+def create_loading_status(message: str) -> Status:
+    """Create a loading status with spinner."""
+    return Status(message, spinner="dots")
+
+def create_progress() -> Progress:
+    """Create a progress bar with custom styling."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(complete_style="green", finished_style="green"),
+        TaskProgressColumn(),
+        expand=True
+    )
+
 def print_db_info(title: str, info_dict: dict, connection_string: str = None, cli_command: str = None):
     """shows all db info in a nice panel"""
-    table = Table(show_header=False, box=ROUNDED, expand=True, padding=(0, 1))
+    table = Table(show_header=False, box=HEAVY, expand=True, padding=(0, 1))
     table.add_column("Key", style="cyan bold")
     table.add_column("Value", style="white")
     
+    # Add database icon if type is in info_dict
+    if "Type" in info_dict:
+        db_type = info_dict["Type"].lower()
+        title = f"{get_db_icon(db_type)} {title}"
+    
     for key, value in info_dict.items():
+        if key == "Status":
+            icon = get_status_icon(str(value))
+            value = f"{icon} {value}"
+        
         if key in ["Password"]:
             value_style = "yellow bold"
         elif key in ["Host", "Port"]:
@@ -37,30 +121,31 @@ def print_db_info(title: str, info_dict: dict, connection_string: str = None, cl
     
     if connection_string:
         sections.append("")
-        sections.append(Text("Connection String:", style="cyan bold"))
+        sections.append(Text("🔌 Connection String:", style="cyan bold"))
         sections.append(Syntax(connection_string, "uri", theme="monokai", word_wrap=True))
     
     if cli_command:
         sections.append("")
-        sections.append(Text("CLI Command:", style="cyan bold"))
+        sections.append(Text("💻 CLI Command:", style="cyan bold"))
         sections.append(Syntax(cli_command, "bash", theme="monokai"))
     
     console.print(Panel(
         Group(*sections),
         title=f"[bold blue]{title}[/bold blue]",
-        box=ROUNDED,
+        box=HEAVY,
+        border_style="blue",
         padding=(1, 2)
     ))
 
 def print_db_list(containers: list):
     """lists all dbs in a table"""
     if not containers:
-        print_warning("No databases found")
+        print_warning(f"{STATUS_ICONS['warning']} No databases found")
         return
     
     table = Table(
-        title="[bold blue]Databases[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]🗄️ Databases[/bold blue]",
+        box=HEAVY,
         show_lines=True,
         padding=(0, 1)
     )
@@ -70,139 +155,99 @@ def print_db_list(containers: list):
     table.add_column("Status", style="green")
     
     for name, db_type, status in sorted(containers):
+        db_icon = get_db_icon(db_type)
         if status == "running":
-            status_style = "[green]⚡ running[/green]"
+            status_style = f"[green]{STATUS_ICONS['running']} running[/green]"
         elif status == "exited":
-            status_style = "[red]⏹ stopped[/red]"
+            status_style = f"[red]{STATUS_ICONS['stopped']} stopped[/red]"
         else:
-            status_style = f"[yellow]{status}[/yellow]"
+            status_style = f"[yellow]{STATUS_ICONS['warning']} {status}[/yellow]"
             
-        table.add_row(name, db_type, status_style)
+        table.add_row(name, f"{db_icon} {db_type}", status_style)
     
     console.print(table)
 
 def print_supported_dbs(db_info: str):
-    """shows what dbs we support"""
-    lines = db_info.split('\n')
-    styled_lines = []
+    """shows what dbs we support with enhanced styling"""
+    from .databases import DATABASES  # Import at function level to avoid circular imports
     
-    for line in lines:
-        if line.strip():
-            if ':' in line:
-                # Database header line
-                if '(' in line:
-                    name, rest = line.split('(', 1)
-                    styled_lines.append(f"[cyan bold]{name}[magenta]({rest}")
-                else:
-                    key, value = line.split(':', 1)
-                    styled_lines.append(f"[cyan bold]{key}:[white]{value}")
-            else:
-                # Description or version line
-                styled_lines.append(f"[white]{line}")
-        else:
-            styled_lines.append("")
+    # Create a simplified table
+    table = Table(
+        title="[bold blue]Available Databases[/bold blue]",
+        box=HEAVY,
+        show_lines=True,
+        padding=(0, 1),
+        title_justify="center",
+        expand=True
+    )
     
+    table.add_column("Database", style="cyan bold", justify="left", width=30)
+    table.add_column("Description", style="white", justify="left", width=40)
+    table.add_column("Versions", style="magenta", justify="left", width=30)
+    table.add_column("Port", style="green", justify="center", width=10)
+    
+    # Add databases to table directly from DATABASES dictionary
+    for db_type, config in sorted(DATABASES.items()):
+        icon = get_db_icon(db_type)
+        name = f"{icon} {config.name}"
+        desc = config.description
+        versions = ", ".join(config.supported_versions) if config.supported_versions else "latest"
+        port = str(config.default_port)
+        
+        table.add_row(name, desc, versions, port)
+    
+    # Print with a simple border
+    console.print("\n")
     console.print(Panel(
-        "\n".join(styled_lines),
-        title="[bold blue]Supported Databases[/bold blue]",
-        box=ROUNDED,
-        padding=(1, 2)
+        table,
+        title="[bold blue]🛠️ Supported Databases[/bold blue]",
+        subtitle="Use with: clidb create <name> --type <database-type>",
+        box=HEAVY,
+        border_style="blue",
+        padding=(1, 1)
     ))
+    console.print("\n")
 
 def print_help_menu():
     """the help screen with all the commands"""
     table = Table(
-        title="[bold blue]CLIDB Commands[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]🎯 CLIDB Commands[/bold blue]",
+        box=HEAVY,
         show_lines=True,
-        padding=(0, 2)
+        padding=(0, 2),
+        title_justify="center"
     )
     
     table.add_column("Command", style="cyan bold")
     table.add_column("Description", style="white")
     table.add_column("Example", style="green")
     
-    table.add_row(
-        "create",
-        "Create a new database",
-        "clidb create mydb --type postgres --version 16"
-    )
-    table.add_row(
-        "list",
-        "List all databases",
-        "clidb list"
-    )
-    table.add_row(
-        "info",
-        "Show database connection details",
-        "clidb info mydb"
-    )
-    table.add_row(
-        "metrics",
-        "Show database performance metrics",
-        "clidb metrics mydb --watch"
-    )
-    table.add_row(
-        "start",
-        "Start a stopped database",
-        "clidb start mydb"
-    )
-    table.add_row(
-        "stop",
-        "Stop a running database",
-        "clidb stop mydb"
-    )
-    table.add_row(
-        "remove",
-        "Remove a database completely",
-        "clidb remove mydb"
-    )
-    table.add_row(
-        "backup",
-        "Create a database backup",
-        "clidb backup mydb --description 'My backup'"
-    )
-    table.add_row(
-        "restore",
-        "Restore from backup",
-        "clidb restore mydb 20240101_120000"
-    )
-    table.add_row(
-        "backups",
-        "List available backups",
-        "clidb backups --db mydb"
-    )
-    table.add_row(
-        "delete-backup",
-        "Delete a backup",
-        "clidb delete-backup mydb 20240101_120000"
-    )
-    table.add_row(
-        "supported",
-        "List supported database types",
-        "clidb supported"
-    )
-    table.add_row(
-        "ssl",
-        "Setup SSL for a database",
-        "clidb ssl mydb example.com --email admin@example.com"
-    )
-    table.add_row(
-        "install-docker",
-        "Install Docker automatically",
-        "clidb install-docker"
-    )
-    table.add_row(
-        "version",
-        "Show the current version",
-        "clidb version"
-    )
+    for command, desc, example in [
+        ("create", "Create a new database", "clidb create mydb --type postgres --version 16"),
+        ("list", "List all databases", "clidb list"),
+        ("info", "Show database connection details", "clidb info mydb"),
+        ("metrics", "Show database performance metrics", "clidb metrics mydb --watch"),
+        ("start", "Start a stopped database", "clidb start mydb"),
+        ("stop", "Stop a running database", "clidb stop mydb"),
+        ("remove", "Remove a database completely", "clidb remove mydb"),
+        ("backup", "Create a database backup", "clidb backup mydb --description 'My backup'"),
+        ("restore", "Restore from backup", "clidb restore mydb 20240101_120000"),
+        ("backups", "List available backups", "clidb backups --db mydb"),
+        ("delete-backup", "Delete a backup", "clidb delete-backup mydb 20240101_120000"),
+        ("supported", "List supported database types", "clidb supported"),
+        ("ssl", "Setup SSL for a database", "clidb ssl mydb example.com --email admin@example.com"),
+        ("install-docker", "Install Docker automatically", "clidb install-docker"),
+        ("version", "Show the current version", "clidb version")
+    ]:
+        icon = get_command_icon(command)
+        table.add_row(f"{icon} {command}", desc, example)
     
     options_table = Table(
-        title="[bold blue]Common Options[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]⚙️ Common Options[/bold blue]",
+        box=HEAVY,
         show_lines=True,
-        padding=(0, 2)
+        padding=(0, 2),
+        title_justify="center"
     )
     
     options_table.add_column("Option", style="yellow bold")
@@ -245,12 +290,12 @@ def print_help_menu():
         "none"
     )
     
-    console.print("\n[bold blue]CLIDB - Simple Database Management[/bold blue]\n")
+    console.print("\n[bold blue]🚀 CLIDB - Simple Database Management[/bold blue]\n")
     console.print("[white]A modern CLI tool for managing databases on VPS systems.[/white]\n")
     console.print(table)
     console.print("\n")
     console.print(options_table)
-    console.print("\n[bold]For more information, visit: [link=https://github.com/awade12/clidbs]GitHub Repository[/link][/bold]") 
+    console.print("\n[bold]For more information, visit: [link=https://github.com/awade12/clidbs]GitHub Repository[/link][/bold]")
 
 def print_db_metrics(db_name: str, metrics: dict):
     """Display database metrics in a styled format."""
@@ -259,33 +304,37 @@ def print_db_metrics(db_name: str, metrics: dict):
         return
         
     # Create main metrics panel
-    main_metrics = Table(show_header=False, box=ROUNDED, expand=True)
+    main_metrics = Table(show_header=False, box=HEAVY, expand=True)
     main_metrics.add_column("Key", style="cyan bold")
     main_metrics.add_column("Value", style="white")
     
-    # Status with color
+    # Status with icon and color
     status_color = {
         "running": "green",
         "exited": "red",
         "paused": "yellow"
     }.get(metrics["status"], "white")
     
-    main_metrics.add_row("Status:", f"[{status_color}]{metrics['status'].upper()}[/{status_color}]")
-    main_metrics.add_row("Uptime:", metrics["uptime"])
-    main_metrics.add_row("Restarts:", str(metrics["restarts"]))
-    main_metrics.add_row("Processes:", str(metrics["pids"]))
+    status_icon = get_status_icon(metrics["status"])
+    main_metrics.add_row(
+        "Status:",
+        f"[{status_color}]{status_icon} {metrics['status'].upper()}[/{status_color}]"
+    )
+    main_metrics.add_row("⏱️ Uptime:", metrics["uptime"])
+    main_metrics.add_row("🔄 Restarts:", str(metrics["restarts"]))
+    main_metrics.add_row("👥 Processes:", str(metrics["pids"]))
     
     # Create resource usage panel
     resource_metrics = Table(
-        title="[bold blue]Resource Usage[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]📊 Resource Usage[/bold blue]",
+        box=HEAVY,
         show_header=False,
         title_justify="left"
     )
     resource_metrics.add_column("Type", style="cyan bold")
     resource_metrics.add_column("Usage", style="white")
     
-    # CPU usage with color
+    # CPU usage with color and icon
     cpu_color = "green"
     if metrics["cpu_percent"] > 80:
         cpu_color = "red"
@@ -293,11 +342,11 @@ def print_db_metrics(db_name: str, metrics: dict):
         cpu_color = "yellow"
     
     resource_metrics.add_row(
-        "CPU:",
+        "🔲 CPU:",
         f"[{cpu_color}]{metrics['cpu_percent']}%[/{cpu_color}]"
     )
     
-    # Memory usage with color
+    # Memory usage with color and icon
     mem_color = "green"
     if metrics["mem_percent"] > 80:
         mem_color = "red"
@@ -305,14 +354,14 @@ def print_db_metrics(db_name: str, metrics: dict):
         mem_color = "yellow"
     
     resource_metrics.add_row(
-        "Memory:",
+        "💾 Memory:",
         f"[{mem_color}]{metrics['mem_percent']}% ({format_bytes(metrics['mem_usage'])} / {format_bytes(metrics['mem_limit'])})[/{mem_color}]"
     )
     
     # Create I/O metrics panel
     io_metrics = Table(
-        title="[bold blue]I/O Statistics[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]📈 I/O Statistics[/bold blue]",
+        box=HEAVY,
         show_header=False,
         title_justify="left"
     )
@@ -322,14 +371,14 @@ def print_db_metrics(db_name: str, metrics: dict):
     
     # Network I/O
     io_metrics.add_row(
-        "Network:",
+        "🌐 Network:",
         f"↓ {format_bytes(metrics['net_rx'])}",
         f"↑ {format_bytes(metrics['net_tx'])}"
     )
     
     # Disk I/O
     io_metrics.add_row(
-        "Disk:",
+        "💿 Disk:",
         f"↓ {format_bytes(metrics['block_read'])}",
         f"↑ {format_bytes(metrics['block_write'])}"
     )
@@ -343,20 +392,21 @@ def print_db_metrics(db_name: str, metrics: dict):
             "",  # Spacer
             io_metrics
         ),
-        title=f"[bold blue]Metrics for '{db_name}'[/bold blue]",
-        box=ROUNDED,
+        title=f"[bold blue]📊 Metrics for '{db_name}'[/bold blue]",
+        box=HEAVY,
+        border_style="blue",
         padding=(1, 2)
-    )) 
+    ))
 
 def print_backup_list(backups: list):
     """Display list of backups in a table."""
     if not backups:
-        print_warning("No backups found")
+        print_warning(f"{STATUS_ICONS['warning']} No backups found")
         return
     
     table = Table(
-        title="[bold blue]Database Backups[/bold blue]",
-        box=ROUNDED,
+        title="[bold blue]💾 Database Backups[/bold blue]",
+        box=HEAVY,
         show_lines=True,
         padding=(0, 1)
     )
@@ -370,9 +420,9 @@ def print_backup_list(backups: list):
     for backup in sorted(backups, key=lambda x: x["timestamp"], reverse=True):
         table.add_row(
             backup.get("database", ""),
-            backup["timestamp"],
-            backup["type"],
-            format_bytes(backup["size"]),
+            f"🕒 {backup['timestamp']}",
+            f"📦 {backup['type']}",
+            f"📊 {format_bytes(backup['size'])}",
             backup.get("description", "") or ""
         )
     
@@ -380,10 +430,11 @@ def print_backup_list(backups: list):
 
 def print_backup_result(action: str, db_name: str, success: bool, timestamp: Optional[str] = None):
     """Display backup action result."""
+    icon = STATUS_ICONS['success'] if success else STATUS_ICONS['error']
     if success:
         if timestamp:
-            print_success(f"{action} for database '{db_name}' completed successfully (timestamp: {timestamp})")
+            print_success(f"{icon} {action} for database '{db_name}' completed successfully (timestamp: {timestamp})")
         else:
-            print_success(f"{action} for database '{db_name}' completed successfully")
+            print_success(f"{icon} {action} for database '{db_name}' completed successfully")
     else:
-        print_error(f"{action} for database '{db_name}' failed") 
+        print_error(f"{icon} {action} for database '{db_name}' failed") 
