@@ -14,7 +14,6 @@ def list_dbs_cmd():
         client = docker.from_env()
         containers = client.containers.list(all=True)
         
-        # Filter our containers
         our_containers = []
         for container in containers:
             db_name, db_type = get_db_info(container.name)

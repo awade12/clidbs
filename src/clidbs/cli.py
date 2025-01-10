@@ -12,14 +12,14 @@ from .functions import (
     check_docker_available
 )
 
-from .cmds.supported import supported_cmd
-from .cmds.version import version_cmd
-from .cmds.install_docker import install_docker_cmd
-from .cmds.reset_pass import reset_password_cmd
-from .cmds.list_dbs import list_dbs_cmd
+from .cmds.list_supported import supported_cmd
+from .cmds.get_version import version_cmd
+from .cmds.system_setup import install_docker_cmd
+from .cmds.reset_password import reset_password_cmd
+from .cmds.list_databases import list_dbs_cmd
 from .cmds.backup_dbs import backup_cmd, restore_cmd, list_backups_cmd, delete_backup_cmd
 from .cmds.db_metrics import metrics_cmd
-from .cmds.db_ssl import ssl_cmd, remove_ssl_cmd, verify_domain_cmd
+from .cmds.ssl_management import ssl_cmd, remove_ssl_cmd, verify_domain_cmd
 from .cmds.db_logs import logs_cmd, inspect_cmd
 from .cmds.db_manage import create_cmd, stop_cmd, start_cmd, remove_cmd, recreate_cmd
 

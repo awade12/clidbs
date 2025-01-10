@@ -1,0 +1,8 @@
+click
+docker
+python-dotenv
+requests
+pydantic
+rich
+packaging
+psutil

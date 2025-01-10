@@ -56,7 +56,6 @@ class NotificationManager:
             "fields": []
         }
 
-        # Add database information
         if "name" in db_info:
             embed["fields"].append({
                 "name": "Database",
@@ -78,7 +77,6 @@ class NotificationManager:
                 "inline": True
             })
 
-        # Add public information (no sensitive data)
         if "host" in db_info:
             embed["fields"].append({
                 "name": "Host",
@@ -100,7 +98,6 @@ class NotificationManager:
                 "inline": True
             })
 
-        # Add error message if present
         if error_message:
             embed["fields"].append({
                 "name": "Error Details",
@@ -141,5 +138,4 @@ class NotificationManager:
             print(f"Failed to send Discord notification: {str(e)}")
             return False
 
-# Initialize the notification manager as a singleton
 notification_manager = NotificationManager() 
