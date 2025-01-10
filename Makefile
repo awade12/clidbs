@@ -71,12 +71,12 @@ bump-major:
 # Publish to test PyPI
 test-publish: clean build check-dist
 	@echo "Publishing to Test PyPI..."
-	$(PYTHON) -m twine upload --repository testpypi dist/*
+	$(PYTHON) -m twine upload --config-file .pypirc --repository testpypi dist/*
 
 # Publish to production PyPI
 publish: clean build check-dist
 	@echo "Publishing to PyPI..."
-	$(PYTHON) -m twine upload dist/*
+	$(PYTHON) -m twine upload --config-file .pypirc dist/*
 
 # Quick command to bump patch version and publish
 release-patch: bump-patch clean build check-dist publish

@@ -145,6 +145,54 @@ server {{
         except Exception as e:
             return False, f"site config failed: {str(e)}"
 
+    def configure_pg_hba(self, container, domain: str) -> bool:
+        """Configure secure pg_hba.conf settings."""
+        try:
+            # Backup existing config
+            result = container.exec_run("cp /var/lib/postgresql/data/pg_hba.conf /var/lib/postgresql/data/pg_hba.conf.bak")
+            if result.exit_code != 0:
+                raise Exception(f"Failed to backup pg_hba.conf: {result.output.decode()}")
+            
+            # Create new pg_hba.conf with secure settings
+            pg_hba_conf = """
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+# Local connections (Unix domain socket)
+local   all            all                                     scram-sha-256
+
+# Allow SSL connections from the domain
+hostssl all            all             all                     scram-sha-256
+
+# Reject non-SSL connections
+host    all            all             all                     reject
+"""
+            # Write the config to a temporary file in the container
+            result = container.exec_run('bash -c "cat > /tmp/pg_hba.conf << \'EOF\'\n' + pg_hba_conf + '\nEOF"')
+            if result.exit_code != 0:
+                raise Exception(f"Failed to create pg_hba.conf: {result.output.decode()}")
+            
+            # Replace the existing pg_hba.conf
+            result = container.exec_run("mv /tmp/pg_hba.conf /var/lib/postgresql/data/pg_hba.conf")
+            if result.exit_code != 0:
+                raise Exception(f"Failed to update pg_hba.conf: {result.output.decode()}")
+            
+            # Set proper permissions
+            result = container.exec_run("chown postgres:postgres /var/lib/postgresql/data/pg_hba.conf")
+            if result.exit_code != 0:
+                raise Exception(f"Failed to set pg_hba.conf ownership: {result.output.decode()}")
+            
+            result = container.exec_run("chmod 600 /var/lib/postgresql/data/pg_hba.conf")
+            if result.exit_code != 0:
+                raise Exception(f"Failed to set pg_hba.conf permissions: {result.output.decode()}")
+            
+            return True
+        except Exception as e:
+            # Try to restore backup if it exists
+            try:
+                container.exec_run("mv /var/lib/postgresql/data/pg_hba.conf.bak /var/lib/postgresql/data/pg_hba.conf")
+            except:
+                pass
+            raise e
+
     def setup_ssl(self, domain: str, email: str, db_type: str, port: int, container_name: str) -> Tuple[bool, str]:
         """set up ssl for database"""
         try:
@@ -191,7 +239,7 @@ server {{
                             # Get logs to see why it won't start
                             logs = container.logs(tail=50).decode()
                             raise Exception(f"Unable to start database container. Logs:\n{logs}")
-                    
+
                     cert_path = f"/etc/letsencrypt/live/{domain}"
                     
                     # Create a temporary directory to prepare the archive
@@ -223,7 +271,7 @@ server {{
                     result = container.exec_run("ls -l /var/lib/postgresql/ssl/")
                     if result.exit_code != 0 or b'fullchain.pem' not in result.output or b'privkey.pem' not in result.output:
                         raise Exception(f"SSL files not properly copied: {result.output.decode()}")
-                    
+
                     # Set permissions in container
                     result = container.exec_run("chown -R postgres:postgres /var/lib/postgresql/ssl")
                     if result.exit_code != 0:
@@ -246,6 +294,7 @@ ssl_cert_file = '/var/lib/postgresql/ssl/fullchain.pem'
 ssl_key_file = '/var/lib/postgresql/ssl/privkey.pem'
 ssl_prefer_server_ciphers = on
 ssl_min_protocol_version = 'TLSv1.2'
+password_encryption = 'scram-sha-256'  # Require SCRAM-SHA-256 for passwords
 """
                     # First, remove any existing SSL configuration
                     result = container.exec_run("sed -i '/^# SSL configuration/,/^$/d' /var/lib/postgresql/data/postgresql.conf")
@@ -261,6 +310,10 @@ ssl_min_protocol_version = 'TLSv1.2'
                     result = container.exec_run('bash -c "cat /tmp/ssl.conf >> /var/lib/postgresql/data/postgresql.conf"')
                     if result.exit_code != 0:
                         raise Exception(f"Failed to update PostgreSQL config: {result.output.decode()}")
+                    
+                    # Configure pg_hba.conf with secure settings
+                    if not self.configure_pg_hba(container, domain):
+                        raise Exception("Failed to configure pg_hba.conf")
                     
                     # Clean up the temporary file
                     container.exec_run('rm /tmp/ssl.conf')

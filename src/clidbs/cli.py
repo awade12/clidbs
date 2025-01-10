@@ -44,7 +44,6 @@ To upgrade, run:
     pipx upgrade clidbs
 """)
     except Exception:
-        # Silently fail if we can't check for updates
         pass
 
 class CLIDBGroup(click.Group):
@@ -52,13 +51,13 @@ class CLIDBGroup(click.Group):
     
     def get_help(self, ctx: Context) -> str:
         """Override to show our styled help instead of Click's default."""
-        check_for_updates()  # Check for updates before showing help
+        check_for_updates()
         print_help_menu()
         return ""
 
     def invoke(self, ctx: Context) -> Any:
         """Override to check for updates before any command."""
-        check_for_updates()  # Check for updates before any command
+        check_for_updates()
         return super().invoke(ctx)
 
 @click.group(cls=CLIDBGroup)
