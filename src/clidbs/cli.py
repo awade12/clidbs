@@ -17,11 +17,14 @@ from .cmds.get_version import version_cmd
 from .cmds.system_setup import install_docker_cmd
 from .cmds.reset_password import reset_password_cmd
 from .cmds.list_databases import list_dbs_cmd
-from .cmds.backup_dbs import backup_cmd, restore_cmd, list_backups_cmd, delete_backup_cmd
+from .cmds.backup_dbs import (
+    backup_cmd, restore_cmd, list_backups_cmd, 
+    delete_backup_cmd, configure_s3_cmd
+)
 from .cmds.db_metrics import metrics_cmd
 from .cmds.ssl_management import ssl_cmd, remove_ssl_cmd, verify_domain_cmd
 from .cmds.db_logs import logs_cmd, inspect_cmd
-from .cmds.db_manage import create_cmd, stop_cmd, start_cmd, remove_cmd, recreate_cmd, secure_cmd
+from .cmds.db_manage import create_cmd, stop_cmd, start_cmd, remove_cmd, recreate_cmd, secure_cmd, info_cmd
 
 from . import __version__
 
@@ -60,35 +63,37 @@ class CLIDBGroup(click.Group):
         check_for_updates()
         return super().invoke(ctx)
 
-@click.group(cls=CLIDBGroup)
-def main():
-    """Simple database management for your VPS."""
-    ctx = click.get_current_context()
-    if ctx.invoked_subcommand != 'install-docker':
-        check_docker_available()
-    pass
+def cli():
+    """CLIDB - Simple database management for developers."""
+    check_for_updates()
+    check_docker_available()
 
-main.add_command(supported_cmd)
-main.add_command(version_cmd)
-main.add_command(install_docker_cmd)
-main.add_command(reset_password_cmd)
+main = click.Group(callback=cli)
+
+# Add commands
+main.add_command(create_cmd)
 main.add_command(list_dbs_cmd)
+main.add_command(info_cmd)
+main.add_command(metrics_cmd)
+main.add_command(start_cmd)
+main.add_command(stop_cmd)
+main.add_command(remove_cmd)
 main.add_command(backup_cmd)
 main.add_command(restore_cmd)
 main.add_command(list_backups_cmd)
 main.add_command(delete_backup_cmd)
-main.add_command(metrics_cmd)
+main.add_command(configure_s3_cmd)
+main.add_command(supported_cmd)
 main.add_command(ssl_cmd)
-main.add_command(remove_ssl_cmd)
-main.add_command(verify_domain_cmd)
-main.add_command(logs_cmd)
-main.add_command(inspect_cmd)
-main.add_command(create_cmd)
-main.add_command(stop_cmd)
-main.add_command(start_cmd)
-main.add_command(remove_cmd)
+main.add_command(install_docker_cmd)
+main.add_command(version_cmd)
 main.add_command(recreate_cmd)
 main.add_command(secure_cmd)
+main.add_command(logs_cmd)
+main.add_command(inspect_cmd)
+main.add_command(remove_ssl_cmd)
+main.add_command(verify_domain_cmd)
+main.add_command(reset_password_cmd)
 
 if __name__ == '__main__':
     main() 

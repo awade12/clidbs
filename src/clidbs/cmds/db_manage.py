@@ -13,6 +13,7 @@ from ..databases import (
     credentials_manager
 )
 from ..style import (
+    print_db_info,
     print_success,
     print_error,
     print_warning,
@@ -77,14 +78,13 @@ def create_cmd(db_name: Optional[str], db_type: Optional[str], version: Optional
                 if not port:
                     port = db_config.default_port
                 
-                # If port is taken, find next available port
-                if not find_next_available_port(port, max_attempts=1):
-                    next_port = find_next_available_port(port + 1, max_attempts=100)
-                    if next_port:
-                        print_warning(f"Port {port} is already in use. Using port {next_port} instead.")
-                        port = next_port
-                    else:
-                        raise Exception(f"Could not find an available port starting from {port}")
+                # Always try to find next available port, starting from the specified or default port
+                next_port = find_next_available_port(port, max_attempts=100)
+                if not next_port:
+                    raise Exception(f"Could not find an available port starting from {port}")
+                if next_port != port:
+                    print_warning(f"Port {port} is already in use. Using port {next_port} instead.")
+                port = next_port
                 
                 # Generate secure password
                 status.update("🔑 Generating secure credentials...")
@@ -441,11 +441,64 @@ def secure_cmd(db_name: str):
 7. Failed connection attempts are logged
 
 To connect to this database, use:
-{get_cli_command(creds.db_type, creds.host, creds.port, creds.user, creds.name)}
+{get_cli_command(creds.db_type, creds.host, creds.port, creds.user, creds.name, db_name)}
 """)
         else:
             print_warning(f"Security hardening not yet implemented for {db_config.name}")
             
     except Exception as e:
         print_error(f"Failed to secure database: {str(e)}")
+
+@click.command(name='info')
+@click.argument('db_name')
+def info_cmd(db_name: str):
+    """Show connection information for a database.
+    
+    Example: clidb info mydb
+    """
+    try:
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+        
+        # Get credentials
+        creds = credentials_manager.get_credentials(db_name)
+        if not creds:
+            raise Exception(f"No credentials found for database '{db_name}'")
+        
+        # Get database configuration
+        db_config = get_database_config(creds.db_type, creds.version)
+        
+        # Create info dictionary
+        info_dict = {
+            "Type": db_config.name,
+            "Version": creds.version or 'latest',
+            "Access": creds.access.upper(),
+            "Host": creds.host,
+            "Port": creds.port,
+            "User": creds.user,
+            "Password": creds.password
+        }
+        
+        # Generate connection details
+        conn_string = get_connection_string(
+            creds.db_type, creds.host, creds.port, 
+            creds.user, creds.password, creds.name
+        )
+        cli_command = get_cli_command(
+            creds.db_type, creds.host, creds.port, 
+            creds.user, creds.password, creds.name
+        )
+        
+        print_db_info(
+            f"Database Information for '{db_name}'",
+            info_dict,
+            conn_string,
+            cli_command
+        )
+            
+    except Exception as e:
+        print_error(f"Failed to get database info: {str(e)}")
 

@@ -230,10 +230,11 @@ def print_help_menu():
         ("start", "Start a stopped database", "clidb start mydb"),
         ("stop", "Stop a running database", "clidb stop mydb"),
         ("remove", "Remove a database completely", "clidb remove mydb"),
-        ("backup", "Create a database backup", "clidb backup mydb --description 'My backup'"),
-        ("restore", "Restore from backup", "clidb restore mydb 20240101_120000"),
-        ("backups", "List available backups", "clidb backups --db mydb"),
-        ("delete-backup", "Delete a backup", "clidb delete-backup mydb 20240101_120000"),
+        ("backup", "Create a database backup", "clidb backup mydb --description 'My backup' --s3"),
+        ("restore", "Restore from backup", "clidb restore mydb 20240101_120000 --from-s3"),
+        ("backups", "List available backups", "clidb backups --db mydb --s3-only"),
+        ("delete-backup", "Delete a backup", "clidb delete-backup mydb 20240101_120000 --keep-s3"),
+        ("configure-s3", "Configure S3 for backups", "clidb configure-s3 --access-key KEY --secret-key SECRET --bucket my-bucket"),
         ("supported", "List supported database types", "clidb supported"),
         ("ssl", "Setup SSL for a database", "clidb ssl mydb example.com --email admin@example.com"),
         ("install-docker", "Install Docker automatically", "clidb install-docker"),
@@ -242,6 +243,7 @@ def print_help_menu():
         icon = get_command_icon(command)
         table.add_row(f"{icon} {command}", desc, example)
     
+    # Add options table
     options_table = Table(
         title="[bold blue]⚙️ Common Options[/bold blue]",
         box=HEAVY,
@@ -250,52 +252,40 @@ def print_help_menu():
         title_justify="center"
     )
     
-    options_table.add_column("Option", style="yellow bold")
+    options_table.add_column("Option", style="cyan bold")
     options_table.add_column("Description", style="white")
     options_table.add_column("Default", style="magenta")
     
-    options_table.add_row(
-        "--type",
-        "Database type to create",
-        "postgres"
-    )
-    options_table.add_row(
-        "--version",
-        "Database version to use",
-        "latest"
-    )
-    options_table.add_row(
-        "--access",
-        "Database access type (public/private)",
-        "public"
-    )
-    options_table.add_row(
-        "--port",
-        "Port to expose the database on",
-        "auto"
-    )
-    options_table.add_row(
-        "--force",
-        "Overwrite existing database",
-        "none"
-    )
-    options_table.add_row(
-        "--watch",
-        "Watch metrics in real-time",
-        "none"
-    )
-    options_table.add_row(
-        "--discord-webhook",
-        "Discord webhook URL for notifications",
-        "none"
-    )
+    for option, desc, default in [
+        ("--type", "Database type to create", "postgres"),
+        ("--version", "Database version to use", "latest"),
+        ("--access", "Database access type (public/private)", "public"),
+        ("--port", "Port to expose the database on", "auto"),
+        ("--force", "Overwrite existing database", "none"),
+        ("--watch", "Watch metrics in real-time", "none"),
+        ("--discord-webhook", "Discord webhook URL for notifications", "none"),
+        ("--s3", "Store backup in S3", "false"),
+        ("--from-s3", "Restore backup from S3", "false"),
+        ("--s3-only", "List only S3 backups", "false"),
+        ("--keep-s3", "Keep backup in S3 when deleting locally", "false")
+    ]:
+        options_table.add_row(option, desc, default)
     
-    console.print("\n[bold blue]🚀 CLIDB - Simple Database Management[/bold blue]\n")
-    console.print("[white]A modern CLI tool for managing databases on VPS systems.[/white]\n")
-    console.print(table)
+    # Print with a simple border
     console.print("\n")
-    console.print(options_table)
-    console.print("\n[bold]For more information, visit: [link=https://github.com/awade12/clidbs]GitHub Repository[/link][/bold]")
+    console.print(Panel(
+        Group(
+            table,
+            Text(""),  # Add spacing
+            options_table
+        ),
+        title="[bold blue]🛠️ CLIDB Help[/bold blue]",
+        subtitle="For more information, visit: GitHub Repository",
+        box=HEAVY,
+        border_style="blue",
+        padding=(1, 1)
+    ))
+    console.print("\n")
 
 def print_db_metrics(db_name: str, metrics: dict):
     """Display database metrics in a styled format."""

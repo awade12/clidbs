@@ -162,13 +162,20 @@ def find_container(client: DockerClient, db_name: str) -> Optional[Container]:
     return None
 
 def is_port_available(port: int) -> bool:
-    """Check if a port is available on localhost."""
+    """Check if a port is available on all interfaces."""
     try:
+        # Try IPv4
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('localhost', port))
+            s.bind(('0.0.0.0', port))
             return True
     except:
-        return False
+        try:
+            # Try IPv6
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                s.bind(('::', port))
+                return True
+        except:
+            return False
 
 def find_next_available_port(start_port: int, max_attempts: int = 100) -> Optional[int]:
     """Find the next available port starting from start_port.
