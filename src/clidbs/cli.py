@@ -21,7 +21,7 @@ from .cmds.backup_dbs import backup_cmd, restore_cmd, list_backups_cmd, delete_b
 from .cmds.db_metrics import metrics_cmd
 from .cmds.ssl_management import ssl_cmd, remove_ssl_cmd, verify_domain_cmd
 from .cmds.db_logs import logs_cmd, inspect_cmd
-from .cmds.db_manage import create_cmd, stop_cmd, start_cmd, remove_cmd, recreate_cmd
+from .cmds.db_manage import create_cmd, stop_cmd, start_cmd, remove_cmd, recreate_cmd, secure_cmd
 
 from . import __version__
 
@@ -88,6 +88,7 @@ main.add_command(stop_cmd)
 main.add_command(start_cmd)
 main.add_command(remove_cmd)
 main.add_command(recreate_cmd)
+main.add_command(secure_cmd)
 
 if __name__ == '__main__':
     main() 

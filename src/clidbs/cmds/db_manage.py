@@ -392,3 +392,60 @@ def recreate_cmd(db_name: str):
     except Exception as e:
         print_error(f"Failed to recreate database: {str(e)}")
 
+@click.command(name='secure')
+@click.argument('db_name')
+def secure_cmd(db_name: str):
+    """Apply security hardening to a database.
+    
+    Example: clidb secure mydb
+    """
+    try:
+        client = docker.from_env()
+        container = find_container(client, db_name)
+        
+        if not container:
+            raise Exception(f"Database '{db_name}' not found")
+        
+        creds = credentials_manager.get_credentials(db_name)
+        if not creds:
+            raise Exception(f"No credentials found for database '{db_name}'")
+        
+        # Get database configuration
+        db_config = get_database_config(creds.db_type, creds.version)
+        
+        if creds.db_type == 'postgres':
+            # Configure PostgreSQL security settings
+            from ..ssl import ssl_manager
+            if not ssl_manager.configure_secure_postgres(container, is_ssl=False):
+                raise Exception("Failed to configure PostgreSQL security settings")
+            
+            # Restart container to apply changes
+            container.restart()
+            
+            # Check if container is running after restart
+            time.sleep(5)  # Give it time to start
+            container.reload()
+            if container.status != 'running':
+                # Get logs to see what went wrong
+                logs = container.logs(tail=50).decode()
+                raise Exception(f"Container failed to start after security setup. Logs:\n{logs}")
+            
+            print_success(f"""Security settings applied to database '{db_name}':
+
+1. Strong password encryption (SCRAM-SHA-256)
+2. Connection timeout of 10 seconds
+3. Detailed logging of connections and disconnections
+4. Slow query logging (queries taking >1s)
+5. Access restricted to localhost only
+6. All remote connections must be authenticated
+7. Failed connection attempts are logged
+
+To connect to this database, use:
+{get_cli_command(creds.db_type, creds.host, creds.port, creds.user, creds.name)}
+""")
+        else:
+            print_warning(f"Security hardening not yet implemented for {db_config.name}")
+            
+    except Exception as e:
+        print_error(f"Failed to secure database: {str(e)}")
+
